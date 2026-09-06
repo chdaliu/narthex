@@ -1,0 +1,579 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* Keep the [hidden] attribute authoritative even where display is set
+   (e.g. #modal-root uses display:flex when open). */
+[hidden] { display: none !important; }
+
+:root {
+  --glass-bg: rgba(18, 22, 32, 0.25);
+  --glass-bg-strong: rgba(18, 22, 32, 0.50);
+  --glass-border: rgba(255, 255, 255, 0.14);
+  --text: #f2f4f8;
+  --muted: rgba(242, 244, 248, 0.72);
+  --accent: #7c9cff;
+  --green: #34d399;
+  --red: #f87171;
+  --radius: 16px;
+  --blur: 8px;
+}
+
+html, body { height: 100%; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+    "Hiragino Sans GB", "Segoe UI", "Noto Sans SC", sans-serif;
+  color: var(--text);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+.bg {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    linear-gradient(rgba(8, 10, 16, 0.10), rgba(8, 10, 16, 0.30)),
+    url("/assets/backgrounds/bg-05.jpg") center / cover no-repeat;
+}
+
+.glass {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(var(--blur)) saturate(150%);
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(150%);
+  border-radius: var(--radius);
+}
+
+.panel { padding: 20px; }
+
+/* ---------- login ---------- */
+
+.center-view {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+#login-form {
+  width: min(340px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 36px 28px;
+  text-align: center;
+  animation: rise .35s ease;
+}
+
+.login-logo {
+  width: 52px;
+  height: 52px;
+  margin: 0 auto;
+  filter: invert(1);
+}
+
+#login-form h1 { font-size: 26px; letter-spacing: 2px; text-shadow: 0 1px 8px rgba(0, 0, 0, 0.45); }
+
+input[type="text"], input[type="password"], input:not([type]) {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--glass-border);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+  transition: border-color .15s;
+}
+
+input:focus { border-color: var(--accent); }
+
+/* ---------- topbar ---------- */
+
+.topbar {
+  position: sticky;
+  top: 12px;
+  z-index: 20;
+  margin: 12px auto 4px;
+  width: calc(100% - 32px);
+  max-width: 1368px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 20px;
+}
+
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand img { width: 26px; height: 26px; filter: invert(1); }
+.brand h1 { font-size: 19px; letter-spacing: 1.5px; text-shadow: 0 1px 8px rgba(0, 0, 0, 0.45); }
+
+.slogan {
+  font-size: 12px;
+  color: var(--muted);
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 38vw;
+  padding-left: 10px;
+  border-left: 1px solid var(--glass-border);
+}
+
+.topbar-actions { display: flex; gap: 8px; }
+
+.lang-select {
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+
+.lang-select option {
+  background: #1a1f2b;
+  color: var(--text);
+}
+
+/* ---------- buttons ---------- */
+
+.btn {
+  border: 1px solid var(--glass-border);
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--text);
+  padding: 9px 16px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: background .15s, transform .1s, border-color .15s;
+  user-select: none;
+}
+
+.btn:hover { background: rgba(255, 255, 255, 0.18); }
+.btn:active { transform: scale(0.97); }
+.btn.primary { background: var(--accent); border-color: transparent; color: #fff; }
+.btn.primary:hover { background: #8faaff; }
+.btn.ghost { background: transparent; }
+.btn.start { background: rgba(52, 211, 153, 0.16); border-color: rgba(52, 211, 153, 0.4); }
+.btn.start:hover { background: rgba(52, 211, 153, 0.28); }
+.btn.stop { background: rgba(248, 113, 113, 0.16); border-color: rgba(248, 113, 113, 0.4); }
+.btn.stop:hover { background: rgba(248, 113, 113, 0.28); }
+.btn:disabled { opacity: .5; cursor: default; }
+
+.icon-btn {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 10px;
+}
+
+.icon-btn img { width: 16px; height: 16px; filter: invert(1); }
+
+/* ---------- grid & cards ---------- */
+
+#grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 18px;
+  padding: 12px 16px 40px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.empty {
+  text-align: center;
+  padding: 60px 16px;
+  font-size: 15px;
+}
+
+.card {
+  border-radius: var(--radius);
+  overflow: hidden;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--blur)) saturate(150%);
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(150%);
+  display: flex;
+  flex-direction: column;
+  transition: transform .2s, box-shadow .2s;
+  animation: rise .3s ease;
+}
+
+.card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+}
+
+.card-cover {
+  position: relative;
+  height: 108px;
+  flex-shrink: 0;
+}
+
+.card-cover .cover-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.card-cover::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(10, 12, 18, 0.05) 30%, rgba(10, 12, 18, 0.75));
+}
+
+.card-icon {
+  position: absolute;
+  left: 14px;
+  bottom: 10px;
+  width: 36px;
+  height: 36px;
+  z-index: 1;
+  filter: invert(1) drop-shadow(0 2px 4px rgba(0, 0, 0, 0.6));
+}
+
+.card-body {
+  padding: 14px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  flex: 1;
+}
+
+.card-name { font-size: 17px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-shadow: 0 1px 8px rgba(0, 0, 0, 0.45); }
+
+.card-pw {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.pw-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  padding: 2px 0;
+  background: none;
+  color: var(--muted);
+  text-align: left;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+}
+.pw-row:hover { color: #fff; }
+.pw-row code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: #fff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pw-row .pw-label { white-space: nowrap; }
+
+.status-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
+}
+
+.dot { width: 9px; height: 9px; border-radius: 50%; background: #8b93a3; flex-shrink: 0; }
+.dot.running { background: var(--green); box-shadow: 0 0 8px var(--green); animation: pulse 2.2s infinite; }
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+  animation: spin .7s linear infinite;
+}
+
+.btn .spinner { width: 12px; height: 12px; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+.card-actions {
+  margin-top: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.card-actions .spacer { flex: 1; }
+
+/* ---------- modal ---------- */
+
+#modal-root {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(6, 8, 12, 0.6);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.modal {
+  width: min(600px, 100%);
+  max-height: 86vh;
+  overflow-y: auto;
+  background: var(--glass-bg-strong);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(var(--blur)) saturate(150%);
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(150%);
+  border-radius: var(--radius);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: rise .25s ease;
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.modal h2 { font-size: 18px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+
+.modal-close { cursor: pointer; border: none; background: transparent; padding: 4px; }
+.modal-close img { width: 18px; height: 18px; filter: invert(1); opacity: .7; }
+.modal-close:hover img { opacity: 1; }
+
+.field-label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+
+.picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
+  gap: 8px;
+}
+
+.picker-grid.bg-grid { grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); }
+
+.picker-item {
+  aspect-ratio: 1;
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background: rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 7px;
+  transition: border-color .12s, background .12s;
+}
+
+.picker-item img { width: 100%; height: 100%; object-fit: contain; filter: invert(1); pointer-events: none; }
+
+.bg-grid .picker-item { aspect-ratio: 16 / 10; padding: 0; overflow: hidden; }
+.bg-grid .picker-item img { object-fit: cover; filter: none; }
+
+.picker-item.selected { border-color: var(--accent); background: rgba(124, 156, 255, 0.22); }
+
+.picker-item.upload { border-style: dashed; border-color: var(--glass-border); }
+
+.kind-list { display: flex; flex-direction: column; gap: 8px; }
+
+/* Add-card modal step sections: consistent vertical rhythm between the
+   label, list and action buttons. :not([hidden]) keeps display:none from
+   the hidden attribute working. */
+#step-kind:not([hidden]),
+#step-pickers:not([hidden]),
+#step-project:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.kind-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--glass-border);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  font-size: 14px;
+  transition: border-color .12s, background .12s;
+}
+
+.kind-item:hover:not(:disabled) { border-color: var(--accent); }
+.kind-item:disabled { opacity: .45; cursor: default; }
+.kind-item.selected { border-color: var(--accent); background: rgba(255, 255, 255, 0.06); }
+.kind-item img { width: 20px; height: 20px; filter: invert(1); }
+.kind-item .kind-desc { font-size: 12px; color: var(--muted); }
+
+.project-create { display: flex; flex-direction: column; gap: 8px; }
+.project-create-row { display: flex; gap: 8px; }
+.project-create-row select { flex: 0 0 42%; }
+.project-create-row input { flex: 1 1 auto; }
+.project-path { font-size: 12px; color: var(--muted); word-break: break-all; }
+
+#account-form {
+  width: min(380px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 36px 28px;
+  animation: rise .35s ease;
+}
+
+#account-form h2 { font-size: 22px; margin: 0 0 6px; }
+
+#account-form .field-label { margin-bottom: 2px; }
+
+.account-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.acct-msg { font-size: 13px; margin: 0; }
+.acct-msg.ok { color: var(--green); }
+.acct-msg.bad { color: var(--red); }
+
+/* ---------- compact mode (desktop only) ---------- */
+
+@media (min-width: 769px) {
+  #grid.compact {
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px;
+  }
+
+  #grid.compact .card-cover { height: 56px; }
+  #grid.compact .card-icon { width: 26px; height: 26px; left: 10px; bottom: 6px; }
+  #grid.compact .card-body { padding: 10px 12px 12px; gap: 6px; }
+  #grid.compact .card-name { font-size: 15px; }
+  #grid.compact .status-row { font-size: 12px; gap: 6px; }
+  #grid.compact .btn { padding: 7px 12px; font-size: 13px; min-height: 32px; }
+  #grid.compact .icon-btn { width: 30px; height: 30px; }
+}
+
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+.muted { color: var(--muted); }
+.error { color: var(--red); font-size: 13px; }
+
+/* ---------- responsive ---------- */
+
+.menu-btn { display: none; }
+
+.topbar.hide {
+  transform: translateY(calc(-100% - 24px));
+}
+
+.topbar {
+  transition: transform .25s ease;
+}
+
+@media (max-width: 768px) {
+  .menu-btn { display: inline-flex; }
+  #btn-compact { display: none; }
+
+  .brand { flex-wrap: wrap; row-gap: 2px; }
+
+  .slogan {
+    flex-basis: 100%;
+    max-width: none;
+    padding-left: 0;
+    border-left: none;
+  }
+
+  .topbar {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 10px;
+    width: calc(100% - 24px);
+    padding: 10px 14px;
+    top: 8px;
+    margin: 8px auto 4px;
+  }
+
+  .topbar-actions {
+    grid-column: 1 / -1;
+    display: none;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .topbar.open .topbar-actions {
+    display: flex;
+  }
+
+  .topbar.open .topbar-actions > * {
+    flex: 1 1 calc(50% - 8px);
+    min-height: 44px;
+  }
+
+  .topbar-actions .lang-select {
+    flex: 1 1 100% !important;
+  }
+
+  /* Phones: always a single full-width column; compact mode (a desktop
+     preference) is ignored entirely at this width. */
+  #grid,
+  #grid.compact {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    padding: 12px;
+  }
+
+  #grid .card-cover { height: 96px; }
+  #grid .card-icon { width: 32px; height: 32px; left: 12px; bottom: 8px; }
+  #grid .card-body { padding: 12px 14px 14px; gap: 8px; }
+  #grid .card-name { font-size: 16px; }
+  #grid .status-row { font-size: 13px; gap: 8px; }
+
+  /* Card actions: natural button widths like desktop (flex wrap), not
+     full-width rows; touch height 42px. */
+  #grid .card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+
+  #grid .card-actions .btn {
+    min-height: 42px;
+    font-size: 14px;
+    padding: 9px 16px;
+  }
+
+  #grid .card-actions .icon-btn {
+    width: 42px;
+    height: 42px;
+    padding: 0;
+  }
+
+  .btn { min-height: 38px; }
+  .modal { padding: 18px; }
+}
