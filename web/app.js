@@ -502,6 +502,7 @@ function kindIcon(kind) {
     case "mdbook": return "book-open";
     case "vscode": return "code";
     case "vscodium": return "code";
+    case "wetty": return "terminal";
     default: return "palette";
   }
 }
@@ -509,7 +510,7 @@ function kindIcon(kind) {
 // availableKinds returns the kinds that can still be added: the app is
 // installed and no card of that kind exists yet.
 function availableKinds() {
-  const kinds = ["comfyui", "opencode", "mdbook", "vscode", "vscodium"];
+  const kinds = ["comfyui", "opencode", "mdbook", "vscode", "vscodium", "wetty"];
   return kinds.filter((k) => {
     const app = meta.apps && meta.apps[k];
     return app && app.installed && !lastCards.some((c) => c.kind === k);

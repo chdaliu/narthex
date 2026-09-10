@@ -133,6 +133,19 @@ exit 0
 SHIM
 chmod +x "$TMP/bin/codium"
 
+# Fake `wetty` CLI: serves HTTP on the port given via `--port`.
+cat > "$TMP/bin/wetty" <<'SHIM'
+#!/bin/sh
+port=4900
+prev=
+for a in "$@"; do
+  if [ "$prev" = "--port" ]; then port=$a; fi
+  prev=$a
+done
+exec python3 -m http.server "$port" --bind 127.0.0.1
+SHIM
+chmod +x "$TMP/bin/wetty"
+
 # A recognized mdBook project plus a configured project directory.
 MDBOOK_BOOKS="$TMP/mdbook-books"
 mkdir -p "$MDBOOK_BOOKS/guide/src"
@@ -182,7 +195,7 @@ kill "$AUTO_PID" 2>/dev/null || true
 wait "$AUTO_PID" 2>/dev/null || true
 
 echo "== serve =="
-OC_ENV_FILE="$TMP/opencode-env.txt" PATH="$TMP/bin:$PATH" NARTHEX_COMFY_APP_DIR="$COMFYAPP" NARTHEX_COMFY_DESKTOP_DIR="$COMFYDESK" NARTHEX_MDBOOK_BIN="$TMP/bin/mdbook" NARTHEX_VSCODE_BIN="$TMP/bin/code" NARTHEX_VSCODIUM_BIN="$TMP/bin/codium" "$BIN" serve --config "$CFG" --port "$PORT" >"$TMP/server.log" 2>&1 &
+OC_ENV_FILE="$TMP/opencode-env.txt" PATH="$TMP/bin:$PATH" NARTHEX_COMFY_APP_DIR="$COMFYAPP" NARTHEX_COMFY_DESKTOP_DIR="$COMFYDESK" NARTHEX_MDBOOK_BIN="$TMP/bin/mdbook" NARTHEX_VSCODE_BIN="$TMP/bin/code" NARTHEX_VSCODIUM_BIN="$TMP/bin/codium" NARTHEX_WETTY_BIN="$TMP/bin/wetty" "$BIN" serve --config "$CFG" --port "$PORT" >"$TMP/server.log" 2>&1 &
 SRV_PID=$!
 for _ in $(seq 1 40); do
   curl -fsS "http://127.0.0.1:$PORT/api/session" >/dev/null 2>&1 && break
@@ -216,7 +229,9 @@ assert apps['mdbook']['label'] == 'MdBook', apps
 assert apps['vscode']['installed'] is True, apps
 assert apps['vscode']['label'] == 'VS Code', apps
 assert apps['vscodium']['installed'] is True, apps
-assert apps['vscodium']['label'] == 'VSCodium', apps"
+assert apps['vscodium']['label'] == 'VSCodium', apps
+assert apps['wetty']['installed'] is True, apps
+assert apps['wetty']['label'] == 'WeTTY', apps"
 
 echo "== language switch =="
 curl -fsS -b "$COOKIE" "http://127.0.0.1:$PORT/api/meta" | python3 -c 'import sys,json;assert json.load(sys.stdin)["lang"]=="en","default lang should be en"'
@@ -438,6 +453,31 @@ assert m and 4700 <= int(m.group(1)) <= 4899, c
 assert '?tkn=' in c['url'] and c['password'], c" "$ID"
 curl -fsS -b "$COOKIE" -X POST "http://127.0.0.1:$PORT/api/cards/$ID/stop" >/dev/null || fail "vscodium stop failed"
 curl -fsS -b "$COOKIE" -X DELETE "http://127.0.0.1:$PORT/api/cards/$ID" >/dev/null || fail "vscodium delete failed"
+
+echo "== wetty card =="
+CARD=$(curl -fsS -b "$COOKIE" -H 'Content-Type: application/json' \
+  -d '{"kind":"wetty"}' \
+  "http://127.0.0.1:$PORT/api/cards")
+ID=$(python3 -c "import sys,json;print(json.loads(sys.argv[1])['id'])" "$CARD")
+[ -n "$ID" ] || fail "no wetty card id in response"
+echo "$CARD" | python3 -c "import sys,json;c=json.load(sys.stdin);assert c['kind']=='wetty' and c['icon']=='terminal' and c['name']=='WeTTY',c"
+echo "$CARD" | python3 -c "import sys,json;c=json.load(sys.stdin);assert 'username' not in c and 'password' not in c,c"
+curl -fsS -b "$COOKIE" -X POST "http://127.0.0.1:$PORT/api/cards/$ID/start" >/dev/null || fail "wetty start failed"
+RUN="no"
+for _ in $(seq 1 40); do
+  STATUS=$(curl -fsS -b "$COOKIE" "http://127.0.0.1:$PORT/api/cards")
+  RUN=$(echo "$STATUS" | python3 -c "import sys,json;c=[x for x in json.load(sys.stdin)['cards'] if x['id']=='$ID'][0];print('yes' if c['running'] and c['healthy'] else 'no')")
+  [ "$RUN" = "yes" ] && break
+  sleep 0.5
+done
+[ "$RUN" = "yes" ] || { echo "$STATUS"; fail "wetty did not become running"; }
+echo "$STATUS" | python3 -c "
+import sys, json, re
+c = [x for x in json.load(sys.stdin)['cards'] if x['id'] == sys.argv[1]][0]
+m = re.search(r':(\d+)/', c['url'])
+assert m and 4900 <= int(m.group(1)) <= 5099, c" "$ID"
+curl -fsS -b "$COOKIE" -X POST "http://127.0.0.1:$PORT/api/cards/$ID/stop" >/dev/null || fail "wetty stop failed"
+curl -fsS -b "$COOKIE" -X DELETE "http://127.0.0.1:$PORT/api/cards/$ID" >/dev/null || fail "wetty delete failed"
 
 echo "== friendly port message =="
 OUT=$("$BIN" serve --config "$CFG" --port "$PORT" 2>&1) || fail "second serve should exit 0"

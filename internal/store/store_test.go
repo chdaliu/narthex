@@ -106,7 +106,8 @@ func TestLoadStateKeepsOneCardPerKind(t *testing.T) {
 		{"id":"c","kind":"opencode","name":"oc"},
 		{"id":"d","kind":"transmission","name":"tx"},
 		{"id":"e","kind":"opencode","name":"dup-oc"},
-		{"id":"f","kind":"weird","name":"obsolete"}
+		{"id":"f","kind":"weird","name":"obsolete"},
+		{"id":"g","kind":"wetty","name":"wt"}
 	]}`
 	if err := os.WriteFile(path, []byte(state), 0o600); err != nil {
 		t.Fatal(err)
@@ -115,14 +116,17 @@ func TestLoadStateKeepsOneCardPerKind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Cards) != 2 {
-		t.Fatalf("expected 2 cards (first per kind), got %+v", got.Cards)
+	if len(got.Cards) != 3 {
+		t.Fatalf("expected 3 cards (first per kind), got %+v", got.Cards)
 	}
 	if got.Cards[0].ID != "a" || got.Cards[0].Kind != KindComfyUI {
 		t.Fatalf("first comfyui card should win: %+v", got.Cards[0])
 	}
 	if got.Cards[1].ID != "c" || got.Cards[1].Kind != KindOpencode {
 		t.Fatalf("first opencode card should win: %+v", got.Cards[1])
+	}
+	if got.Cards[2].ID != "g" || got.Cards[2].Kind != KindWetty {
+		t.Fatalf("wetty card should be kept: %+v", got.Cards[2])
 	}
 }
 

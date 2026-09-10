@@ -58,6 +58,20 @@ type Manager struct {
 	// the browser (--connection-token). Mandatory because it binds a
 	// non-loopback address.
 	VscodiumConnectionToken string
+	// WettyHostname is the listen address passed to the WeTTY server
+	// (0.0.0.0 makes it reachable from other devices).
+	WettyHostname string
+	// WettyPortRange is the range a free port is picked from for the WeTTY
+	// server.
+	WettyPortRange [2]int
+	// WettySSHHost is the SSH server WeTTY connects to (--ssh-host).
+	WettySSHHost string
+	// WettySSHPort is the SSH server port (--ssh-port); 0 uses WeTTY's
+	// default.
+	WettySSHPort int
+	// WettySSHUser is the default SSH user (--ssh-user); empty lets WeTTY
+	// prompt for a username.
+	WettySSHUser string
 }
 
 // New creates a Manager with sane defaults.
@@ -103,6 +117,12 @@ func (m *Manager) Start(kind, dir, id string) (pid int, port int, err error) {
 			return 0, 0, err
 		}
 		pid, err = m.startVSCodium(dir, id, port)
+	case store.KindWetty:
+		port, err = freePortIn(m.WettyPortRange)
+		if err != nil {
+			return 0, 0, err
+		}
+		pid, err = m.startWetty(dir, id, port)
 	default:
 		return 0, 0, fmt.Errorf("unsupported service kind: %s", kind)
 	}

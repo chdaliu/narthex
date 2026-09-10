@@ -58,6 +58,9 @@ type Service struct {
 	// when it is not installed. Defaults to procman.DetectVSCodium;
 	// overridable in tests.
 	VscodiumBin func() string
+	// WettyBin returns the path to the wetty CLI, or "" when it is not
+	// installed. Defaults to procman.DetectWetty; overridable in tests.
+	WettyBin func() string
 	// Username is the decrypted login username (plaintext in memory only).
 	Username string
 }
@@ -81,6 +84,7 @@ func NewService(dir string, cfg *store.Config, state *store.State, backend procm
 		},
 		VscodeBin:   procman.DetectVSCode,
 		VscodiumBin: procman.DetectVSCodium,
+		WettyBin:    procman.DetectWetty,
 		Username:    username,
 	}
 }
@@ -200,6 +204,8 @@ func (s *Service) instanceHost(reqHost string, kind string) string {
 		host = s.Config.Vscode.Hostname
 	case store.KindVSCodium:
 		host = s.Config.Vscodium.Hostname
+	case store.KindWetty:
+		host = s.Config.Wetty.Hostname
 	}
 	if !IsLoopback(host) && reqHost != "" {
 		if hostname, _, err := net.SplitHostPort(reqHost); err == nil {
@@ -481,6 +487,10 @@ func (s *Service) HandleMeta(w http.ResponseWriter, r *http.Request) {
 		store.KindVSCodium: {
 			Installed: s.appInstalled(store.KindVSCodium),
 			Label:     kindLabel(store.KindVSCodium),
+		},
+		store.KindWetty: {
+			Installed: s.appInstalled(store.KindWetty),
+			Label:     kindLabel(store.KindWetty),
 		},
 	}
 	WriteJSON(w, http.StatusOK, map[string]any{

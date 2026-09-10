@@ -43,7 +43,7 @@ func (s *Service) HandleCreateCard(w http.ResponseWriter, r *http.Request) {
 	if kind == "" {
 		kind = store.KindComfyUI
 	}
-	if kind != store.KindComfyUI && kind != store.KindOpencode && kind != store.KindMdbook && kind != store.KindVSCode && kind != store.KindVSCodium {
+	if kind != store.KindComfyUI && kind != store.KindOpencode && kind != store.KindMdbook && kind != store.KindVSCode && kind != store.KindVSCodium && kind != store.KindWetty {
 		s.writeError(w, http.StatusBadRequest, "err.kindUnsupported", kind)
 		return
 	}
@@ -227,6 +227,8 @@ func (s *Service) appInstalled(kind string) bool {
 		return s.VscodeBin() != ""
 	case store.KindVSCodium:
 		return s.VscodiumBin() != ""
+	case store.KindWetty:
+		return s.WettyBin() != ""
 	}
 	return false
 }
@@ -243,7 +245,7 @@ func (s *Service) installDir(kind, cardDir string) string {
 		}
 	case store.KindMdbook:
 		return cardDir
-	case store.KindOpencode, store.KindVSCode, store.KindVSCodium:
+	case store.KindOpencode, store.KindVSCode, store.KindVSCodium, store.KindWetty:
 		if home, err := os.UserHomeDir(); err == nil {
 			return home
 		}
@@ -278,6 +280,8 @@ func kindLabel(kind string) string {
 		return "VS Code"
 	case store.KindVSCodium:
 		return "VSCodium"
+	case store.KindWetty:
+		return "WeTTY"
 	}
 	return kind
 }
@@ -306,6 +310,8 @@ func defaultIcon(icon, kind string) string {
 			return "code"
 		case store.KindVSCodium:
 			return "code"
+		case store.KindWetty:
+			return "terminal"
 		}
 	}
 	return icon

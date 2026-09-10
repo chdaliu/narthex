@@ -186,6 +186,11 @@ func cmdServe(args []string) error {
 	backend.VscodiumHostname = cfg.Vscodium.Hostname
 	backend.VscodiumPortRange = cfg.Vscodium.PortRange
 	backend.VscodiumConnectionToken = cfg.Vscodium.ConnectionToken
+	backend.WettyHostname = cfg.Wetty.Hostname
+	backend.WettyPortRange = cfg.Wetty.PortRange
+	backend.WettySSHHost = cfg.Wetty.SSHHost
+	backend.WettySSHPort = cfg.Wetty.SSHPort
+	backend.WettySSHUser = cfg.Wetty.SSHUser
 
 	state, err := store.LoadState(filepath.Join(dir, store.StateFile))
 	if err != nil {
@@ -236,6 +241,9 @@ func detectedApps(cfg *store.Config) []string {
 	}
 	if procman.DetectVSCodium() != "" {
 		labels = append(labels, "VSCodium")
+	}
+	if procman.DetectWetty() != "" {
+		labels = append(labels, "WeTTY")
 	}
 	return labels
 }

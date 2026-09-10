@@ -36,6 +36,10 @@ const (
 	// KindVSCodium launches the VSCodium web server (`codium serve-web`).
 	// Kept separate from KindVSCode so both can run at the same time.
 	KindVSCodium = "vscodium"
+	// KindWetty launches the WeTTY terminal-over-web server (`wetty`).
+	// WeTTY has no HTTP-layer auth: the browser authenticates with the
+	// SSH account of the configured sshHost (localhost by default).
+	KindWetty = "wetty"
 )
 
 // ComfyUIConfig controls how ComfyUI servers are spawned.
@@ -100,6 +104,23 @@ type VscodiumConfig struct {
 	ConnectionToken string `json:"connectionToken,omitempty"`
 }
 
+// WettyConfig controls how the WeTTY terminal-over-web server is spawned.
+type WettyConfig struct {
+	// Hostname is the listen address of the WeTTY server. 0.0.0.0 makes it
+	// reachable from other devices on the LAN.
+	Hostname string `json:"hostname"`
+	// PortRange is the range a free port is picked from.
+	PortRange [2]int `json:"portRange"`
+	// SSHHost is the SSH server WeTTY connects to (--ssh-host). Defaults to
+	// localhost (the narthex host).
+	SSHHost string `json:"sshHost,omitempty"`
+	// SSHPort is the SSH server port (--ssh-port). 0 uses WeTTY's default.
+	SSHPort int `json:"sshPort,omitempty"`
+	// SSHUser is the default SSH user (--ssh-user). Empty lets WeTTY prompt
+	// for a username.
+	SSHUser string `json:"sshUser,omitempty"`
+}
+
 // Config is the persisted narthex configuration.
 type Config struct {
 	Hostname      string        `json:"hostname"`
@@ -115,6 +136,8 @@ type Config struct {
 	Vscode VscodeConfig `json:"vscode"`
 	// Vscodium controls the VSCodium web server card.
 	Vscodium VscodiumConfig `json:"vscodium"`
+	// Wetty controls the WeTTY terminal-over-web card.
+	Wetty WettyConfig `json:"wetty"`
 	// Language selects the UI and CLI language: en (default), zh-CN, zh-TW.
 	Language string `json:"language"`
 	// SessionTTLHours is the session validity in hours (default 720 = 30 days).
@@ -165,6 +188,11 @@ func DefaultConfig() *Config {
 		Vscodium: VscodiumConfig{
 			Hostname:  "0.0.0.0",
 			PortRange: [2]int{4700, 4899},
+		},
+		Wetty: WettyConfig{
+			Hostname:  "0.0.0.0",
+			PortRange: [2]int{4900, 5099},
+			SSHHost:   "localhost",
 		},
 	}
 }
@@ -236,6 +264,15 @@ func LoadConfig(path string) (*Config, error) {
 	if c.Vscodium.PortRange == [2]int{0, 0} {
 		c.Vscodium.PortRange = def.Vscodium.PortRange
 	}
+	if c.Wetty.Hostname == "" {
+		c.Wetty.Hostname = def.Wetty.Hostname
+	}
+	if c.Wetty.PortRange == [2]int{0, 0} {
+		c.Wetty.PortRange = def.Wetty.PortRange
+	}
+	if c.Wetty.SSHHost == "" {
+		c.Wetty.SSHHost = def.Wetty.SSHHost
+	}
 	if c.Language == "" {
 		c.Language = def.Language
 	}
@@ -297,7 +334,7 @@ func LoadState(path string) (*State, error) {
 	seen := map[string]bool{}
 	kept := s.Cards[:0]
 	for _, c := range s.Cards {
-		if c.Kind != KindComfyUI && c.Kind != KindOpencode && c.Kind != KindMdbook && c.Kind != KindVSCode && c.Kind != KindVSCodium {
+		if c.Kind != KindComfyUI && c.Kind != KindOpencode && c.Kind != KindMdbook && c.Kind != KindVSCode && c.Kind != KindVSCodium && c.Kind != KindWetty {
 			continue
 		}
 		if seen[c.Kind] {

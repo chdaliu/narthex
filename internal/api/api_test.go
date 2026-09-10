@@ -143,6 +143,12 @@ func vscodiumInstalled(s *api.Service) {
 	s.VscodiumBin = func() string { return "/usr/bin/codium" }
 }
 
+// wettyInstalled configures the wetty detection seam so the WeTTY
+// terminal-over-web kind is reported as installed.
+func wettyInstalled(s *api.Service) {
+	s.WettyBin = func() string { return "/usr/bin/wetty" }
+}
+
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
 	return newTestEnvWith(t, nil)
@@ -449,6 +455,7 @@ func TestCardRequiresInstalledApp(t *testing.T) {
 		s.MdbookBin = func() string { return "" }
 		s.VscodeBin = func() string { return "" }
 		s.VscodiumBin = func() string { return "" }
+		s.WettyBin = func() string { return "" }
 	})
 	cookie := loginCookie(t, env.base, testPassword)
 
@@ -469,6 +476,10 @@ func TestCardRequiresInstalledApp(t *testing.T) {
 	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("create vscodium without app = %d, want 400 (%v)", res.StatusCode, m)
 	}
+	res, m = doReq(t, "POST", env.base+"/api/cards", cookie, map[string]string{"kind": "wetty"})
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("create wetty without app = %d, want 400 (%v)", res.StatusCode, m)
+	}
 
 	// The meta reports the apps as not installed, so the UI hides them.
 	res, m = doReq(t, "GET", env.base+"/api/meta", cookie, nil)
@@ -488,6 +499,10 @@ func TestCardRequiresInstalledApp(t *testing.T) {
 	cd, _ := apps["vscodium"].(map[string]any)
 	if cd == nil || cd["installed"] != false {
 		t.Fatalf("meta apps.vscodium = %v", apps)
+	}
+	wt, _ := apps["wetty"].(map[string]any)
+	if wt == nil || wt["installed"] != false {
+		t.Fatalf("meta apps.wetty = %v", apps)
 	}
 }
 
@@ -1390,6 +1405,55 @@ func TestVscodiumCard(t *testing.T) {
 	}
 }
 
+func TestWettyCard(t *testing.T) {
+	env := newTestEnvFull(t, nil, func(s *api.Service) {
+		wettyInstalled(s)
+	})
+	cookie := loginCookie(t, env.base, testPassword)
+
+	res, m := doReq(t, "GET", env.base+"/api/meta", cookie, nil)
+	apps, _ := m["apps"].(map[string]any)
+	wt, _ := apps["wetty"].(map[string]any)
+	if wt == nil || wt["installed"] != true || wt["label"] != "WeTTY" {
+		t.Fatalf("meta apps.wetty = %v", apps)
+	}
+
+	res, m = doReq(t, "POST", env.base+"/api/cards", cookie, map[string]string{"kind": "wetty"})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("create wetty = %d %v", res.StatusCode, m)
+	}
+	if m["kind"] != "wetty" || m["name"] != "WeTTY" || m["icon"] != "terminal" {
+		t.Fatalf("wetty defaults = %v", m)
+	}
+	// WeTTY has no HTTP-layer credentials to surface on the card.
+	if _, ok := m["username"]; ok {
+		t.Fatalf("wetty card must not expose a username: %v", m)
+	}
+	if _, ok := m["password"]; ok {
+		t.Fatalf("wetty card must not expose a password: %v", m)
+	}
+	id := cardID(t, m)
+
+	// Start runs in the user's home like opencode.
+	home, _ := os.UserHomeDir()
+	res, m = doReq(t, "POST", env.base+"/api/cards/"+id+"/start", cookie, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("start wetty = %d %v", res.StatusCode, m)
+	}
+	calls := env.backend.startCalls()
+	if len(calls) != 1 || calls[0] != "wetty|"+home+"|"+id {
+		t.Fatalf("wetty start calls = %v", calls)
+	}
+	if m["url"] != "http://127.0.0.1:8000/" {
+		t.Fatalf("wetty url = %v", m["url"])
+	}
+
+	res, _ = doReq(t, "POST", env.base+"/api/cards/"+id+"/stop", cookie, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("stop wetty = %d", res.StatusCode)
+	}
+}
+
 func TestMetaAppsIncludesNewKinds(t *testing.T) {
 	root := t.TempDir()
 	booksDir := filepath.Join(root, "books")
@@ -1400,6 +1464,7 @@ func TestMetaAppsIncludesNewKinds(t *testing.T) {
 		mdbookInstalled(s, booksDir, bookDir)
 		vscodeInstalled(s)
 		vscodiumInstalled(s)
+		wettyInstalled(s)
 	})
 	cookie := loginCookie(t, env.base, testPassword)
 	res, m := doReq(t, "GET", env.base+"/api/meta", cookie, nil)
@@ -1408,7 +1473,7 @@ func TestMetaAppsIncludesNewKinds(t *testing.T) {
 	}
 	apps, _ := m["apps"].(map[string]any)
 	for kind, want := range map[string]bool{
-		"comfyui": true, "opencode": true, "mdbook": true, "vscode": true, "vscodium": true,
+		"comfyui": true, "opencode": true, "mdbook": true, "vscode": true, "vscodium": true, "wetty": true,
 	} {
 		a, _ := apps[kind].(map[string]any)
 		if a == nil || a["installed"] != want {
