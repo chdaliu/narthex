@@ -234,6 +234,7 @@ function cardEl(card) {
       <div class="card-actions">
         <button class="btn start-btn"></button>
         <a class="btn open-btn" target="_blank" rel="noopener"></a>
+        <a class="btn temp-btn" target="_blank" rel="noopener"></a>
         <span class="spacer"></span>
         <button class="btn icon-btn edit-btn" title="${t("card.edit")}"><img src="/assets/icons/pencil.svg" alt="${t("card.edit")}"></button>
         <button class="btn icon-btn del-btn" title="${t("card.delete")}"><img src="/assets/icons/trash-2.svg" alt="${t("card.delete")}"></button>
@@ -254,6 +255,7 @@ function cardEl(card) {
     uptime: $(".status-uptime", el),
     startBtn: $(".start-btn", el),
     openBtn: $(".open-btn", el),
+    tempBtn: $(".temp-btn", el),
     editBtn: $(".edit-btn", el),
     delBtn: $(".del-btn", el),
   };
@@ -292,6 +294,16 @@ function updateCardEl(r, card) {
   r.editBtn.title = t("card.edit");
   r.delBtn.title = t("card.delete");
 
+  // The "temporary open" button only makes sense for token kinds
+  // (vscode/vscodium): it opens the card URL WITHOUT the ?tkn= token, so
+  // the browser does not auto-authenticate — in an anonymous/fresh window
+  // VS Code shows its token prompt instead (mirroring a manual login).
+  const tempUrl = (card.url || "").split("?")[0];
+  r.tempBtn.href = tempUrl || "#";
+  r.tempBtn.textContent = t("card.tempOpen");
+  r.tempBtn.title = t("card.tempOpenHint");
+  r.tempBtn.style.display = isTokenKind(card.kind) ? "" : "none";
+
   if (card.running && !card.healthy) {
     r.statusSpin.hidden = false;
     r.startBtn.className = "btn stop";
@@ -303,6 +315,9 @@ function updateCardEl(r, card) {
     r.openBtn.style.display = "";
     r.openBtn.disabled = true;
     r.openBtn.title = t("status.starting");
+    r.tempBtn.className = "btn temp-btn";
+    r.tempBtn.disabled = true;
+    r.tempBtn.title = t("status.starting");
     return;
   }
   r.statusSpin.hidden = true;
@@ -316,12 +331,17 @@ function updateCardEl(r, card) {
     r.openBtn.textContent = t("card.open");
     r.openBtn.style.display = "";
     r.openBtn.disabled = !card.healthy;
+    r.tempBtn.className = "btn temp-btn";
+    r.tempBtn.disabled = !card.healthy;
   } else {
     r.startBtn.className = "btn start";
     r.startBtn.textContent = t("card.start");
     r.startBtn.disabled = false;
     r.openBtn.style.display = "none";
     r.openBtn.href = "#";
+    r.tempBtn.style.display = "none";
+    r.tempBtn.href = "#";
+    r.tempBtn.disabled = true;
   }
 }
 

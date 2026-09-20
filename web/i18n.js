@@ -92,6 +92,8 @@ const I18N = {
     "card.token": "Token",
     "card.copied": "Copied",
     "card.copyHint": "Click to copy",
+    "card.tempOpen": "Temporary open",
+    "card.tempOpenHint": "Open without the connection token (fresh manual login)",
 
     "modal.addTitle": "Add card",
     "modal.editTitle": "Edit card",
@@ -202,6 +204,8 @@ const I18N = {
     "card.token": "令牌",
     "card.copied": "已复制",
     "card.copyHint": "点击复制",
+    "card.tempOpen": "临时打开",
+    "card.tempOpenHint": "不带连接令牌打开(全新手动登录)",
 
     "modal.addTitle": "添加卡片",
     "modal.editTitle": "编辑卡片",
@@ -312,6 +316,8 @@ const I18N = {
     "card.token": "權杖",
     "card.copied": "已複製",
     "card.copyHint": "點擊複製",
+    "card.tempOpen": "臨時開啟",
+    "card.tempOpenHint": "不帶連線權杖開啟(全新手動登入)",
 
     "modal.addTitle": "新增卡片",
     "modal.editTitle": "編輯卡片",

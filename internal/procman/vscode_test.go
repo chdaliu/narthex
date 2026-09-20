@@ -97,21 +97,26 @@ func TestVSCodeFamilyLifecycle(t *testing.T) {
 		t.Skip("python3 not available; needed for the code/codium shim")
 	}
 	cases := []struct {
-		name      string
-		kind      string
-		binName   string
-		envKey    string
-		hostname  string
-		portRange [2]int
-		token     string
+		name         string
+		kind         string
+		binName      string
+		envKey       string
+		hostname     string
+		portRange    [2]int
+		token        string
+		dataDir      string
+		settingsFile string
 	}{
-		{"vscode", "vscode", "code", "NARTHEX_VSCODE_BIN", "127.0.0.1", [2]int{4780, 4799}, "tok-vscode"},
-		{"vscodium", "vscodium", "codium", "NARTHEX_VSCODIUM_BIN", "127.0.0.1", [2]int{4880, 4899}, "tok-vscodium"},
+		{"vscode", "vscode", "code", "NARTHEX_VSCODE_BIN", "127.0.0.1", [2]int{4780, 4799}, "tok-vscode", filepath.Join(t.TempDir(), "vscode-data"), filepath.Join(t.TempDir(), "vscode-machine.json")},
+		{"vscodium", "vscodium", "codium", "NARTHEX_VSCODIUM_BIN", "127.0.0.1", [2]int{4880, 4899}, "tok-vscodium", filepath.Join(t.TempDir(), "vscodium-data"), filepath.Join(t.TempDir(), "vscodium-machine.json")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			bin := writeFakeCodeServe(t, tc.binName)
 			t.Setenv(tc.envKey, bin)
+			if err := os.WriteFile(tc.settingsFile, []byte(`{"editor.fontSize": 16}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
 			logDir := t.TempDir()
 			dumpFile := filepath.Join(t.TempDir(), "dump.txt")
 			t.Setenv("VSCODE_DUMP_FILE", dumpFile)
@@ -120,10 +125,14 @@ func TestVSCodeFamilyLifecycle(t *testing.T) {
 				m.VscodeHostname = tc.hostname
 				m.VscodePortRange = tc.portRange
 				m.VscodeConnectionToken = tc.token
+				m.VscodeDataDir = tc.dataDir
+				m.VscodeMachineSettingsFile = tc.settingsFile
 			} else {
 				m.VscodiumHostname = tc.hostname
 				m.VscodiumPortRange = tc.portRange
 				m.VscodiumConnectionToken = tc.token
+				m.VscodiumDataDir = tc.dataDir
+				m.VscodiumMachineSettingsFile = tc.settingsFile
 			}
 
 			pid, port, err := m.Start(tc.kind, t.TempDir(), "vc1")
@@ -153,10 +162,14 @@ func TestVSCodeFamilyLifecycle(t *testing.T) {
 				t.Fatalf("child dump = %q", raw)
 			}
 			joined := strings.Join(strings.Split(strings.TrimPrefix(lines[0], "ARGS|"), " "), " ")
-			for _, want := range []string{"serve-web", "--host", tc.hostname, "--connection-token", tc.token, "--accept-server-license-terms", "--disable-telemetry"} {
+			for _, want := range []string{"serve-web", "--host", tc.hostname, "--connection-token", tc.token, "--server-data-dir", tc.dataDir, "--accept-server-license-terms", "--disable-telemetry"} {
 				if !strings.Contains(joined, want) {
 					t.Fatalf("child args %q missing %q", lines[0], want)
 				}
+			}
+			target := filepath.Join(tc.dataDir, "data", "Machine", "settings.json")
+			if b, err := os.ReadFile(target); err != nil || !strings.Contains(string(b), `"editor.fontSize": 16`) {
+				t.Fatalf("machine settings not seeded at %s: %v %q", target, err, b)
 			}
 			pathLine := strings.TrimPrefix(lines[1], "PATH|")
 			noOpen := filepath.Join(logDir, "no-open")
@@ -185,6 +198,66 @@ func TestVSCodeFamilyLifecycle(t *testing.T) {
 				t.Fatal("shim should be dead after stop")
 			}
 		})
+	}
+}
+
+func TestSeedMachineSettings(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "machine.json")
+	if err := os.WriteFile(src, []byte(`{"a": 1, "b": 2}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dataDir := filepath.Join(dir, "data")
+
+	// Missing target: all source keys are written.
+	if err := seedMachineSettings(dataDir, src); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dataDir, "data", "Machine", "settings.json")
+	b, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"a": 1`, `"b": 2`} {
+		if !strings.Contains(string(b), want) {
+			t.Fatalf("seeded settings %q missing %q", b, want)
+		}
+	}
+
+	// Existing keys are preserved (Remote Settings edits win); only missing
+	// keys are added.
+	if err := os.WriteFile(target, []byte(`{"a": 99, "c": 3}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedMachineSettings(dataDir, src); err != nil {
+		t.Fatal(err)
+	}
+	b, err = os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"a": 99`) {
+		t.Fatalf("existing key must be preserved: %q", b)
+	}
+	if !strings.Contains(string(b), `"c": 3`) {
+		t.Fatalf("unrelated existing key must be preserved: %q", b)
+	}
+	if !strings.Contains(string(b), `"b": 2`) {
+		t.Fatalf("missing key must be added: %q", b)
+	}
+
+	// Invalid source JSON is an error.
+	bad := filepath.Join(dir, "bad.json")
+	if err := os.WriteFile(bad, []byte(`{not json`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedMachineSettings(dataDir, bad); err == nil {
+		t.Fatal("invalid source JSON should error")
+	}
+
+	// Missing source file is an error.
+	if err := seedMachineSettings(dataDir, filepath.Join(dir, "nope.json")); err == nil {
+		t.Fatal("missing source file should error")
 	}
 }
 

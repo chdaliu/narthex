@@ -88,6 +88,17 @@ type VscodeConfig struct {
 	// (--connection-token). Auto-generated on first run; mandatory because
 	// the server binds a non-loopback address.
 	ConnectionToken string `json:"connectionToken,omitempty"`
+	// MachineSettingsFile is the path to a JSON file whose keys are seeded
+	// into the server-side Machine settings (<server-data-dir>/data/Machine/
+	// settings.json) on start. Only keys missing from the target are added,
+	// so settings edited later via Remote Settings are preserved. Relative
+	// paths are resolved against the config directory.
+	MachineSettingsFile string `json:"machineSettingsFile,omitempty"`
+	// DataDir overrides the server data directory (--server-data-dir).
+	// Empty uses <config>/vscode-data. Point it at another server's dir
+	// (e.g. ~/.vscodium-server) to share server-side state with an instance
+	// launched manually. A leading ~/ is expanded.
+	DataDir string `json:"dataDir,omitempty"`
 }
 
 // VscodiumConfig controls how the VSCodium web server is spawned. It is
@@ -102,6 +113,15 @@ type VscodiumConfig struct {
 	// (--connection-token). Auto-generated on first run; mandatory because
 	// the server binds a non-loopback address.
 	ConnectionToken string `json:"connectionToken,omitempty"`
+	// MachineSettingsFile is the path to a JSON file whose keys are seeded
+	// into the server-side Machine settings on start; independent from the
+	// VS Code one. Only keys missing from the target are added.
+	MachineSettingsFile string `json:"machineSettingsFile,omitempty"`
+	// DataDir overrides the server data directory (--server-data-dir).
+	// Empty uses <config>/vscodium-data. Point it at another server's dir
+	// (e.g. ~/.vscodium-server) to share server-side state with an instance
+	// launched manually. A leading ~/ is expanded.
+	DataDir string `json:"dataDir,omitempty"`
 }
 
 // WettyConfig controls how the WeTTY terminal-over-web server is spawned.

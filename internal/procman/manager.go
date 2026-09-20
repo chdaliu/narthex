@@ -58,6 +58,20 @@ type Manager struct {
 	// the browser (--connection-token). Mandatory because it binds a
 	// non-loopback address.
 	VscodiumConnectionToken string
+	// VscodeDataDir is the server-side data directory for the VS Code web
+	// server (--server-data-dir): remote settings and other server state
+	// persist there, independent of the browser (anonymous windows cannot
+	// persist browser user settings).
+	VscodeDataDir string
+	// VscodeMachineSettingsFile is a JSON file whose keys are seeded into
+	// the VS Code server-side Machine settings on start (missing keys only).
+	VscodeMachineSettingsFile string
+	// VscodiumDataDir is the same server-side data directory for the
+	// VSCodium web server, independent from VscodeDataDir.
+	VscodiumDataDir string
+	// VscodiumMachineSettingsFile is the VSCodium equivalent of
+	// VscodeMachineSettingsFile, independent from it.
+	VscodiumMachineSettingsFile string
 	// WettyHostname is the listen address passed to the WeTTY server
 	// (0.0.0.0 makes it reachable from other devices).
 	WettyHostname string

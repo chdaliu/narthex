@@ -166,14 +166,23 @@ echo "== setup =="
 "$BIN" setup --config "$CFG" --password "$PASS" >/dev/null 2>&1 && fail "setup without --force should fail"
 grep -q '"usernameEnc"' "$CFG" || fail "config should store an encrypted username"
 grep -q "\"$USER\"" "$CFG" && fail "username must not be stored in plaintext"
-# Configure the mdBook project directories so the mdbook card kind shows.
-python3 - "$CFG" "$MDBOOK_BOOKS" <<'PY'
+# Configure the mdBook project directories so the mdbook card kind shows,
+# and point the vscodium kind at a Machine settings seed file.
+VSCODIUM_MACHINE="$TMP/vscodium-machine.json"
+cat > "$VSCODIUM_MACHINE" <<'EOF'
+{ "editor.fontSize": 16, "files.autoSave": "afterDelay" }
+EOF
+python3 - "$CFG" "$MDBOOK_BOOKS" "$VSCODIUM_MACHINE" <<'PY'
 import json, sys
-cfg, books = sys.argv[1], sys.argv[2]
+cfg, books, machine = sys.argv[1], sys.argv[2], sys.argv[3]
 c = json.load(open(cfg))
 c.setdefault("mdbook", {})["dirs"] = [books]
+c.setdefault("vscodium", {})["machineSettingsFile"] = machine
 json.dump(c, open(cfg, "w"), indent=2)
 PY
+# A pre-existing server-side Machine setting that the seed must preserve.
+mkdir -p "$TMP/vscodium-data/data/Machine"
+printf '{ "editor.fontSize": 99 }\n' > "$TMP/vscodium-data/data/Machine/settings.json"
 
 echo "== first-run auto-setup (serve without config) =="
 AUTO_CFG="$TMP/auto-config.json"
@@ -416,6 +425,7 @@ for _ in $(seq 1 40); do
   sleep 0.5
 done
 [ "$RUN" = "yes" ] || { echo "$STATUS"; fail "vscode did not become running"; }
+[ -d "$TMP/vscode-data" ] || fail "vscode server data dir not created"
 echo "$STATUS" | python3 -c "
 import sys, json, re
 c = [x for x in json.load(sys.stdin)['cards'] if x['id'] == sys.argv[1]][0]
@@ -445,6 +455,13 @@ for _ in $(seq 1 40); do
   sleep 0.5
 done
 [ "$RUN" = "yes" ] || { echo "$STATUS"; fail "vscodium did not become running"; }
+[ -d "$TMP/vscodium-data" ] || fail "vscodium server data dir not created"
+python3 - "$TMP/vscodium-data/data/Machine/settings.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["editor.fontSize"] == 99, d        # existing Remote Setting preserved
+assert d["files.autoSave"] == "afterDelay", d  # missing key seeded from the file
+PY
 echo "$STATUS" | python3 -c "
 import sys, json, re
 c = [x for x in json.load(sys.stdin)['cards'] if x['id'] == sys.argv[1]][0]

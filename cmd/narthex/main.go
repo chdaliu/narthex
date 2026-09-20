@@ -186,6 +186,10 @@ func cmdServe(args []string) error {
 	backend.VscodiumHostname = cfg.Vscodium.Hostname
 	backend.VscodiumPortRange = cfg.Vscodium.PortRange
 	backend.VscodiumConnectionToken = cfg.Vscodium.ConnectionToken
+	backend.VscodeDataDir = dataDirFor(dir, cfg.Vscode.DataDir, "vscode-data")
+	backend.VscodiumDataDir = dataDirFor(dir, cfg.Vscodium.DataDir, "vscodium-data")
+	backend.VscodeMachineSettingsFile = resolveFromDir(dir, cfg.Vscode.MachineSettingsFile)
+	backend.VscodiumMachineSettingsFile = resolveFromDir(dir, cfg.Vscodium.MachineSettingsFile)
 	backend.WettyHostname = cfg.Wetty.Hostname
 	backend.WettyPortRange = cfg.Wetty.PortRange
 	backend.WettySSHHost = cfg.Wetty.SSHHost
@@ -275,6 +279,37 @@ func firstRunSetup(configPath string, cfg *store.Config, L func(string, ...any) 
 	fmt.Println(L("msg.passwordGenerated", generated))
 	fmt.Println(L("msg.username", store.DefaultUsername))
 	return nil
+}
+
+// resolveFromDir resolves a configured path against dir: an empty path is
+// returned unchanged, a leading ~/ (or bare ~) is expanded to the user's
+// home, an absolute path is returned as-is, and a relative path is joined
+// with dir.
+func resolveFromDir(dir, path string) string {
+	if path == "" {
+		return ""
+	}
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			if path == "~" {
+				return home
+			}
+			return filepath.Join(home, path[2:])
+		}
+	}
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(dir, path)
+}
+
+// dataDirFor returns the server data directory for a code-family kind:
+// the configured path (resolved) when set, else <configDir>/<fallback>.
+func dataDirFor(configDir, configured, fallback string) string {
+	if configured == "" {
+		return filepath.Join(configDir, fallback)
+	}
+	return resolveFromDir(configDir, configured)
 }
 
 // displayAddr returns a browser-usable address for messages: wildcard
