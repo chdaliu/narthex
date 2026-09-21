@@ -8,6 +8,7 @@ import (
 
 	"narthex/internal/api"
 	"narthex/internal/auth"
+	"narthex/internal/gateway"
 	"narthex/internal/store"
 	"narthex/web"
 )
@@ -44,6 +45,7 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("POST /api/mdbook/projects", s.svc.HandleMdbookCreate)
 	protected.HandleFunc("POST /api/settings", s.svc.HandleSettings)
 	protected.HandleFunc("POST /api/account", s.svc.HandleAccount)
+	protected.HandleFunc("POST /api/restart", s.svc.HandleRestart)
 	protected.HandleFunc("GET /api/autostart", s.svc.HandleAutostart)
 	protected.HandleFunc("POST /api/autostart", s.svc.HandleAutostart)
 	protected.HandleFunc("POST /api/uploads", s.svc.HandleUploadCreate)
@@ -53,6 +55,19 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/uploads/", s.uploadsHandler())
 	mux.Handle("/", staticHandler())
 	return mux
+}
+
+// GatewayHandler returns the opencode reverse-proxy handler. It is served
+// on a dedicated listener (see cmd/narthex) so opencode's root-absolute
+// paths stay untouched while the browser only ever talks to narthex.
+func (s *Server) GatewayHandler() http.Handler {
+	return gateway.Handler(s.cfg, s.svc.Lang, func() (gateway.Target, bool) {
+		addr, user, pass, ok := s.svc.OpencodeGatewayTarget()
+		if !ok {
+			return gateway.Target{}, false
+		}
+		return gateway.Target{Addr: addr, Username: user, Password: pass}, true
+	})
 }
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
@@ -76,9 +91,13 @@ func cookieValue(r *http.Request) string {
 func staticHandler() http.Handler {
 	fs := http.FileServerFS(web.Files)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/assets/") {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/assets/backgrounds/"):
+			// Background presets are large and rarely change.
+			w.Header().Set("Cache-Control", "public, max-age=2592000")
+		case strings.HasPrefix(r.URL.Path, "/assets/"):
 			w.Header().Set("Cache-Control", "public, max-age=86400")
-		} else {
+		default:
 			w.Header().Set("Cache-Control", "no-cache")
 		}
 		fs.ServeHTTP(w, r)
@@ -99,7 +118,7 @@ func (s *Server) uploadsHandler() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		http.ServeFile(w, r, filepath.Join(s.uploadsDir, name))
 	})

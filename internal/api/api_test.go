@@ -3,8 +3,10 @@ package api_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"narthex/internal/api"
 	"narthex/internal/auth"
@@ -154,6 +157,18 @@ func newTestEnv(t *testing.T) *testEnv {
 	return newTestEnvWith(t, nil)
 }
 
+// freePort returns a currently free loopback port.
+func freePort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	return p
+}
+
 func newTestEnvWith(t *testing.T, mutate func(*store.Config)) *testEnv {
 	t.Helper()
 	return newTestEnvFull(t, mutate, nil)
@@ -168,7 +183,6 @@ func newTestEnvFull(t *testing.T, mutateCfg func(*store.Config), mutateSvc func(
 		SessionSecret:   store.RandomID(16),
 		Language:        "en",
 		SessionTTLHours: 720,
-		CompactCards:    false,
 		PageBackground:  "bg-05",
 	}
 	if mutateCfg != nil {
@@ -663,6 +677,7 @@ func TestOpencodeCardShowsCredentials(t *testing.T) {
 	}, func(s *api.Service) {
 		comfyInstalled(s, "/path/to/comfy/ComfyUI")
 		opencodeInstalled(s)
+		s.GatewayPort = 5199
 	})
 	cookie := loginCookie(t, env.base, testPassword)
 
@@ -672,6 +687,20 @@ func TestOpencodeCardShowsCredentials(t *testing.T) {
 	}
 	if m["username"] != store.OpencodeUsername || m["password"] != "oc-secret" {
 		t.Fatalf("opencode card should expose the web credentials, got %v", m)
+	}
+
+	// The "Open" URL points at the narthex gateway (no embedded
+	// credentials); the direct API URL names the opencode listen port.
+	id := cardID(t, m)
+	res, m = doReq(t, "POST", env.base+"/api/cards/"+id+"/start", cookie, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("start opencode = %d %v", res.StatusCode, m)
+	}
+	if m["url"] != "http://127.0.0.1:5199/" {
+		t.Fatalf("opencode url should point at the gateway, got %v", m["url"])
+	}
+	if m["apiUrl"] != "http://127.0.0.1:8000/" {
+		t.Fatalf("opencode apiUrl should name the direct endpoint, got %v", m["apiUrl"])
 	}
 
 	// The comfyui card must NOT expose credentials.
@@ -713,25 +742,86 @@ func TestMetaApps(t *testing.T) {
 	}
 }
 
-func TestSettingsCompactAndPageBackground(t *testing.T) {
+func TestMetaAppReasons(t *testing.T) {
+	t.Run("mdbook cli without dirs", func(t *testing.T) {
+		env := newTestEnvFull(t, nil, func(s *api.Service) {
+			s.MdbookBin = func() string { return "/usr/bin/mdbook" }
+			s.Config.Mdbook.Dirs = []string{}
+		})
+		cookie := loginCookie(t, env.base, testPassword)
+		_, m := doReq(t, "GET", env.base+"/api/meta", cookie, nil)
+		apps, _ := m["apps"].(map[string]any)
+		mb, _ := apps["mdbook"].(map[string]any)
+		if mb["installed"] != false || mb["reason"] != "add.reason.mdbookNoDirs" {
+			t.Fatalf("mdbook reason = %v", mb)
+		}
+	})
+
+	t.Run("comfy desktop without an instance", func(t *testing.T) {
+		env := newTestEnvFull(t, nil, func(s *api.Service) {
+			s.ComfyUIAppDir = func() string { return "/Applications/Comfy Desktop.app" }
+			s.ComfyUIDirs = func() []string { return nil }
+		})
+		cookie := loginCookie(t, env.base, testPassword)
+		_, m := doReq(t, "GET", env.base+"/api/meta", cookie, nil)
+		apps, _ := m["apps"].(map[string]any)
+		cf, _ := apps["comfyui"].(map[string]any)
+		if cf["installed"] != false || cf["reason"] != "add.reason.comfyNoInstall" {
+			t.Fatalf("comfyui reason = %v", cf)
+		}
+	})
+
+	t.Run("undetected kinds report notInstalled", func(t *testing.T) {
+		env := newTestEnvFull(t, nil, func(s *api.Service) {
+			s.ComfyUIAppDir = func() string { return "" }
+			s.ComfyUIDirs = func() []string { return nil }
+			s.OpencodeBin = func() string { return "" }
+			s.MdbookBin = func() string { return "" }
+			s.VscodeBin = func() string { return "" }
+			s.VscodiumBin = func() string { return "" }
+			s.WettyBin = func() string { return "" }
+		})
+		cookie := loginCookie(t, env.base, testPassword)
+		_, m := doReq(t, "GET", env.base+"/api/meta", cookie, nil)
+		apps, _ := m["apps"].(map[string]any)
+		for _, k := range []string{"comfyui", "opencode", "mdbook", "vscode", "vscodium", "wetty"} {
+			a, _ := apps[k].(map[string]any)
+			if a["installed"] != false || a["reason"] != "add.reason.notInstalled" {
+				t.Fatalf("%s reason = %v", k, a)
+			}
+		}
+	})
+
+	t.Run("installed kinds omit the reason", func(t *testing.T) {
+		env := newTestEnvFull(t, nil, func(s *api.Service) {
+			comfyInstalled(s, "/path/to/comfy/ComfyUI")
+			opencodeInstalled(s)
+		})
+		cookie := loginCookie(t, env.base, testPassword)
+		_, m := doReq(t, "GET", env.base+"/api/meta", cookie, nil)
+		apps, _ := m["apps"].(map[string]any)
+		cf, _ := apps["comfyui"].(map[string]any)
+		if _, ok := cf["reason"]; ok {
+			t.Fatalf("installed comfyui should omit reason, got %v", cf)
+		}
+	})
+}
+
+func TestSettingsPageBackground(t *testing.T) {
 	env := newTestEnv(t)
 	cookie := loginCookie(t, env.base, testPassword)
 
-	res, m := doReq(t, "POST", env.base+"/api/settings", cookie, map[string]any{"compact": true, "pageBackground": "bg-01"})
-	if res.StatusCode != http.StatusOK || m["compact"] != true || m["pageBackground"] != "bg-01" {
+	res, m := doReq(t, "POST", env.base+"/api/settings", cookie, map[string]any{"pageBackground": "bg-01"})
+	if res.StatusCode != http.StatusOK || m["pageBackground"] != "bg-01" {
 		t.Fatalf("settings = %d %v", res.StatusCode, m)
 	}
 	res, m = doReq(t, "GET", env.base+"/api/meta", cookie, nil)
-	if m["compact"] != true || m["pageBackground"] != "bg-01" {
+	if m["pageBackground"] != "bg-01" {
 		t.Fatalf("meta after settings = %v", m)
 	}
 	res, _ = doReq(t, "POST", env.base+"/api/settings", cookie, map[string]any{"pageBackground": "no-such-bg"})
 	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("invalid pageBackground = %d, want 400", res.StatusCode)
-	}
-	res, _ = doReq(t, "POST", env.base+"/api/settings", cookie, map[string]any{"compact": false})
-	if res.StatusCode != http.StatusOK {
-		t.Fatalf("unset compact = %d", res.StatusCode)
 	}
 }
 
@@ -995,9 +1085,6 @@ func TestMeta(t *testing.T) {
 	if m["lang"] != "en" {
 		t.Fatalf("default meta lang = %v, want en", m["lang"])
 	}
-	if m["compact"] != false {
-		t.Fatalf("default compact = %v, want false", m["compact"])
-	}
 	if m["pageBackground"] != "bg-05" {
 		t.Fatalf("default pageBackground = %v, want bg-05", m["pageBackground"])
 	}
@@ -1105,6 +1192,151 @@ func TestInternalAddress(t *testing.T) {
 	}
 }
 
+func TestOpencodeURL(t *testing.T) {
+	env := newTestEnvFull(t, func(cfg *store.Config) {
+		cfg.Opencode.Hostname = "0.0.0.0"
+		cfg.Opencode.Password = "oc-secret"
+	}, func(s *api.Service) {
+		opencodeInstalled(s)
+		s.GatewayPort = 5199
+	})
+	cookie := loginCookie(t, env.base, testPassword)
+
+	_, m := doReq(t, "POST", env.base+"/api/cards", cookie, map[string]string{"kind": "opencode"})
+	id := cardID(t, m)
+	res, m := doReq(t, "POST", env.base+"/api/cards/"+id+"/start", cookie, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("start opencode = %d %v", res.StatusCode, m)
+	}
+
+	getCards := func(host string) map[string]any {
+		req, err := http.NewRequest("GET", env.base+"/api/cards", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Cookie", cookie)
+		req.Host = host
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var m map[string]any
+		json.NewDecoder(res.Body).Decode(&m)
+		return m
+	}
+
+	// A non-loopback listen address mirrors the visitor's host; the
+	// gateway port replaces the opencode listen port.
+	card := getCards("192.168.1.5:9090")["cards"].([]any)[0].(map[string]any)
+	if card["url"] != "http://192.168.1.5:5199/" {
+		t.Fatalf("opencode url = %v", card["url"])
+	}
+	if card["apiUrl"] != "http://192.168.1.5:8000/" {
+		t.Fatalf("opencode apiUrl = %v", card["apiUrl"])
+	}
+
+	// The internal network address replaces the visitor's host.
+	res, _ = doReq(t, "POST", env.base+"/api/settings", cookie, map[string]any{"internalAddress": "10.0.0.5"})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("set internal address = %d", res.StatusCode)
+	}
+	card = getCards("192.168.1.5:9090")["cards"].([]any)[0].(map[string]any)
+	if card["url"] != "http://10.0.0.5:5199/" {
+		t.Fatalf("opencode url with internal address = %v", card["url"])
+	}
+}
+
+// TestOpencodeGatewayLifecycle checks that the reverse-proxy listener is
+// started with the opencode card and torn down when it stops or is
+// deleted, leaving no lingering socket.
+func TestOpencodeGatewayLifecycle(t *testing.T) {
+	gwWant := freePort(t)
+	var svcRef *api.Service
+	env := newTestEnvFull(t, func(cfg *store.Config) {
+		cfg.Opencode.Password = "oc-secret"
+		cfg.Opencode.GatewayPort = gwWant
+	}, func(s *api.Service) {
+		opencodeInstalled(s)
+		svcRef = s
+		s.GatewayHandler = func() http.Handler { return http.NotFoundHandler() }
+	})
+	cookie := loginCookie(t, env.base, testPassword)
+
+	res, m := doReq(t, "POST", env.base+"/api/cards", cookie, map[string]string{"kind": "opencode"})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("create opencode = %d %v", res.StatusCode, m)
+	}
+	id := cardID(t, m)
+	if svcRef.GatewayPort != 0 {
+		t.Fatalf("gateway running before start: %d", svcRef.GatewayPort)
+	}
+
+	res, m = doReq(t, "POST", env.base+"/api/cards/"+id+"/start", cookie, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("start opencode = %d %v", res.StatusCode, m)
+	}
+	gwPort := svcRef.GatewayPort
+	if gwPort == 0 {
+		t.Fatalf("gateway not started with the card")
+	}
+	if gwPort != gwWant {
+		t.Fatalf("gateway port = %d, want preferred %d", gwPort, gwWant)
+	}
+	if want := fmt.Sprintf("http://127.0.0.1:%d/", gwPort); m["url"] != want {
+		t.Fatalf("card url = %v, want %v", m["url"], want)
+	}
+
+	res, _ = doReq(t, "POST", env.base+"/api/cards/"+id+"/stop", cookie, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("stop opencode = %d", res.StatusCode)
+	}
+	if svcRef.GatewayPort != 0 {
+		t.Fatalf("gateway still running after stop: %d", svcRef.GatewayPort)
+	}
+
+	// Start then delete must also stop the gateway, and a restart must reuse
+	// the preferred port so the "Open" URL stays stable.
+	res, _ = doReq(t, "POST", env.base+"/api/cards/"+id+"/start", cookie, nil)
+	if res.StatusCode != http.StatusOK || svcRef.GatewayPort != gwWant {
+		t.Fatalf("restart opencode = %d, gateway = %d, want %d", res.StatusCode, svcRef.GatewayPort, gwWant)
+	}
+	res, _ = doReq(t, "DELETE", env.base+"/api/cards/"+id, cookie, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("delete opencode = %d", res.StatusCode)
+	}
+	if svcRef.GatewayPort != 0 {
+		t.Fatalf("gateway still running after delete: %d", svcRef.GatewayPort)
+	}
+}
+
+// TestSettingsGatewayPort checks validation and persistence of the fixed
+// opencode gateway port exposed by /api/settings and /api/meta.
+func TestSettingsGatewayPort(t *testing.T) {
+	env := newTestEnvFull(t, func(cfg *store.Config) {
+		cfg.Opencode.GatewayPort = store.DefaultOpencodeGatewayPort
+	}, nil)
+	cookie := loginCookie(t, env.base, testPassword)
+
+	// Out-of-range values and the dashboard port are rejected.
+	for _, bad := range []int{0, 70000, 9090} {
+		res, _ := doReq(t, "POST", env.base+"/api/settings", cookie, map[string]any{"gatewayPort": bad})
+		if res.StatusCode != http.StatusBadRequest {
+			t.Fatalf("gatewayPort %d = %d, want 400", bad, res.StatusCode)
+		}
+	}
+
+	want := freePort(t)
+	res, m := doReq(t, "POST", env.base+"/api/settings", cookie, map[string]any{"gatewayPort": want})
+	if res.StatusCode != http.StatusOK || m["gatewayPort"] != float64(want) {
+		t.Fatalf("set gatewayPort = %d %v", res.StatusCode, m)
+	}
+	res, m = doReq(t, "GET", env.base+"/api/meta", cookie, nil)
+	if m["gatewayPort"] != float64(want) {
+		t.Fatalf("meta gatewayPort = %v, want %d", m["gatewayPort"], want)
+	}
+}
+
 func TestAutostartAPI(t *testing.T) {
 	env := newTestEnv(t)
 	cookie := loginCookie(t, env.base, testPassword)
@@ -1159,6 +1391,73 @@ func TestAutostartAPI(t *testing.T) {
 		defer res.Body.Close()
 		if res.StatusCode != http.StatusBadRequest {
 			t.Fatalf("invalid JSON = %d, want 400", res.StatusCode)
+		}
+	})
+}
+
+func TestSessionBootID(t *testing.T) {
+	env := newTestEnv(t)
+	res, m := doReq(t, "GET", env.base+"/api/session", "", nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("session = %d, want 200", res.StatusCode)
+	}
+	if id, _ := m["bootId"].(string); id == "" {
+		t.Fatalf("bootId missing from session response: %v", m)
+	}
+	// The login page shares the dashboard background, so the public
+	// session response must carry it (with a resolved URL).
+	if m["pageBackground"] != "bg-05" {
+		t.Fatalf("pageBackground = %v", m["pageBackground"])
+	}
+	if m["pageBackgroundUrl"] != "/assets/backgrounds/bg-05.jpg" {
+		t.Fatalf("pageBackgroundUrl = %v", m["pageBackgroundUrl"])
+	}
+}
+
+func TestRestartAPI(t *testing.T) {
+	t.Run("unauthenticated rejected", func(t *testing.T) {
+		env := newTestEnv(t)
+		res, _ := doReq(t, "POST", env.base+"/api/restart", "", nil)
+		if res.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("POST without auth = %d, want 401", res.StatusCode)
+		}
+	})
+
+	t.Run("unavailable without a restart action", func(t *testing.T) {
+		env := newTestEnv(t) // Restart is nil by default in tests.
+		cookie := loginCookie(t, env.base, testPassword)
+		res, m := doReq(t, "POST", env.base+"/api/restart", cookie, map[string]string{})
+		if res.StatusCode != http.StatusNotImplemented {
+			t.Fatalf("restart without action = %d, want 501", res.StatusCode)
+		}
+		if m["error"] == nil {
+			t.Fatalf("expected error message, got %v", m)
+		}
+	})
+
+	t.Run("scheduled restart is invoked", func(t *testing.T) {
+		called := make(chan struct{}, 1)
+		env := newTestEnvFull(t, nil, func(s *api.Service) {
+			s.RestartDelay = time.Millisecond
+			s.Restart = func() {
+				select {
+				case called <- struct{}{}:
+				default:
+				}
+			}
+		})
+		cookie := loginCookie(t, env.base, testPassword)
+		res, m := doReq(t, "POST", env.base+"/api/restart", cookie, map[string]string{})
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("restart = %d, want 200", res.StatusCode)
+		}
+		if ok, _ := m["ok"].(bool); !ok {
+			t.Fatalf("expected ok=true, got %v", m)
+		}
+		select {
+		case <-called:
+		case <-time.After(2 * time.Second):
+			t.Fatal("restart action was not invoked")
 		}
 	})
 }

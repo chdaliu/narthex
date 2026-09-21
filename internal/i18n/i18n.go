@@ -283,6 +283,11 @@ autostart 參數:
 		ZHCN: "无效的背景",
 		ZHTW: "無效的背景",
 	},
+	"err.gatewayUnavailable": {
+		EN:   "opencode is not running",
+		ZHCN: "opencode 未运行",
+		ZHTW: "opencode 未執行",
+	},
 	"err.sloganTooLong": {
 		EN:   "slogan must be 80 characters or fewer",
 		ZHCN: "标语最长 80 个字符",
@@ -292,6 +297,11 @@ autostart 參數:
 		EN:   "internal address must be 253 characters or fewer",
 		ZHCN: "内部组网地址最长 253 个字符",
 		ZHTW: "內部組網地址最長 253 個字元",
+	},
+	"err.invalidGatewayPort": {
+		EN:   "invalid gateway port (1-65535, and not the dashboard port)",
+		ZHCN: "无效的网关端口(1-65535,且不能是面板端口)",
+		ZHTW: "無效的閘道連接埠(1-65535,且不能是面板連接埠)",
 	},
 	"err.mdbookNoProject": {
 		EN:   "the selected directory is not a recognized mdBook project (create the book first)",
@@ -339,6 +349,11 @@ autostart 參數:
 		EN:   "OpenCode web password (shown on the OpenCode card): %s",
 		ZHCN: "OpenCode web 密码(显示在 OpenCode 卡片上): %s",
 		ZHTW: "OpenCode web 密碼(顯示在 OpenCode 卡片上): %s",
+	},
+	"msg.opencodeGateway": {
+		EN:   "opencode gateway on %s",
+		ZHCN: "opencode 网关监听 %s",
+		ZHTW: "opencode 閘道監聽 %s",
 	},
 	"msg.vscodeToken": {
 		EN:   "VS Code web connection token (shown on the VS Code card): %s",
@@ -444,6 +459,11 @@ autostart 參數:
 		EN:   "autostart is only supported on macOS",
 		ZHCN: "自启仅支持 macOS",
 		ZHTW: "自啟僅支援 macOS",
+	},
+	"err.restartUnsupported": {
+		EN:   "restart is not available on this host",
+		ZHCN: "此主机不支持重启",
+		ZHTW: "此主機不支援重啟",
 	},
 	"warn.insecureHTTP": {
 		EN:   "warning: serving HTTP on %s — passwords travel in plaintext; use on trusted networks only",

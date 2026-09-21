@@ -19,6 +19,7 @@ import (
 	"narthex/internal/autostart"
 	"narthex/internal/i18n"
 	"narthex/internal/procman"
+	"narthex/internal/restart"
 	"narthex/internal/secretbox"
 	"narthex/internal/server"
 	"narthex/internal/store"
@@ -202,7 +203,19 @@ func cmdServe(args []string) error {
 	}
 
 	svc := api.NewService(dir, cfg, state, backend, username)
+	svc.Restart = func() {
+		spec := autostart.Spec{Kind: autostart.KindServe, ConfigPath: *configPath}
+		if st, err := autostart.Status(spec); err == nil && st.Installed && st.Loaded {
+			if err := autostart.Restart(spec); err == nil {
+				return
+			}
+		}
+		if err := restart.Self(); err != nil {
+			fmt.Fprintln(os.Stderr, "restart:", err)
+		}
+	}
 	srv := server.New(cfg, svc)
+	svc.GatewayHandler = srv.GatewayHandler
 
 	addr := net.JoinHostPort(cfg.Hostname, strconv.Itoa(cfg.Port))
 	if conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond); err == nil {
@@ -223,6 +236,12 @@ func cmdServe(args []string) error {
 	fmt.Println(L("msg.listening", version, addr))
 	if !api.IsLoopback(cfg.Hostname) {
 		fmt.Println(L("warn.insecureHTTP", addr))
+	}
+	// The gateway lives only while opencode runs; reconcile picks up an
+	// opencode process left running from a previous serve.
+	svc.ReconcileGateway()
+	if svc.GatewayPort > 0 {
+		fmt.Println(L("msg.opencodeGateway", displayAddr(cfg.Hostname, svc.GatewayPort)))
 	}
 	return http.ListenAndServe(addr, srv.Handler())
 }

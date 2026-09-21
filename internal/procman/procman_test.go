@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -28,12 +29,14 @@ func writeFakeApp(t *testing.T, name, binName, script string) string {
 }
 
 // writeComfyUIShim writes a minimal ComfyUI install: a main.py that
-// serves HTTP on the port given via --port, mirroring ComfyUI's CLI.
+// serves HTTP on the port given via --port, mirroring ComfyUI's CLI. It
+// prints its argv first so tests can assert the launch arguments.
 func writeComfyUIShim(t *testing.T, dir string) {
 	t.Helper()
 	mainPy := `#!/usr/bin/env python3
 import http.server, sys
 
+print("ARGV " + " ".join(sys.argv[1:]), flush=True)
 port = 8188
 prev = None
 for a in sys.argv[1:]:
@@ -138,6 +141,8 @@ func TestComfyUILifecycle(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not available; needed for the ComfyUI shim")
 	}
+	// Isolate from a real desktop install so no storage args are injected.
+	t.Setenv("NARTHEX_COMFY_DESKTOP_DIR", t.TempDir())
 	install := t.TempDir()
 	writeComfyUIShim(t, install)
 	logDir := t.TempDir()
@@ -180,6 +185,7 @@ func TestComfyUILifecycle(t *testing.T) {
 }
 
 func TestComfyUIErrors(t *testing.T) {
+	t.Setenv("NARTHEX_COMFY_DESKTOP_DIR", t.TempDir())
 	m := &Manager{Hostname: "127.0.0.1", PortRange: [2]int{4190, 4199}, LogDir: t.TempDir()}
 
 	// Directory without main.py.
@@ -232,5 +238,237 @@ func TestDetectComfyUIInstalls(t *testing.T) {
 	got := detectComfyUIInstalls(desktop)
 	if len(got) != 1 || got[0] != good {
 		t.Fatalf("detected dirs = %v, want [%s]", got, good)
+	}
+}
+
+// argValue returns the value following flag in args.
+func argValue(args []string, flag string) (string, bool) {
+	for i, a := range args {
+		if a == flag && i+1 < len(args) {
+			return args[i+1], true
+		}
+	}
+	return "", false
+}
+
+// hasArg reports whether want appears in args.
+func hasArg(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
+		}
+	}
+	return false
+}
+
+// writeComfyInstallations writes an installations.json into the desktop
+// support dir.
+func writeComfyInstallations(t *testing.T, desktop string, records []map[string]any) {
+	t.Helper()
+	b, err := json.Marshal(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(desktop, "installations.json"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestComfyLaunchArgs checks the desktop-parity launch arguments: shared
+// model paths, shared input/output and the instance's extra launch args.
+func TestComfyLaunchArgs(t *testing.T) {
+	desktop := t.TempDir()
+	base := t.TempDir()
+	codeDir := filepath.Join(base, "inst1", "ComfyUI")
+	if err := os.MkdirAll(codeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeComfyInstallations(t, desktop, []map[string]any{{
+		"id":          "inst-1",
+		"installPath": filepath.Join(base, "inst1"),
+		"status":      "installed",
+		"launchArgs":  "--enable-manager",
+	}})
+	yaml := filepath.Join(desktop, "instance-model-paths", "inst-1.yaml")
+	if err := os.MkdirAll(filepath.Dir(yaml), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(yaml, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	in := filepath.Join(base, "shared-in")
+	out := filepath.Join(base, "shared-out")
+	settings, _ := json.Marshal(map[string]string{"inputDir": in, "outputDir": out})
+	if err := os.WriteFile(filepath.Join(desktop, "settings.json"), settings, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NARTHEX_COMFY_DESKTOP_DIR", desktop)
+
+	args := comfyLaunchArgs(codeDir)
+	if v, ok := argValue(args, "--extra-model-paths-config"); !ok || v != yaml {
+		t.Fatalf("extra model config = %q ok=%v, want %q (args %v)", v, ok, yaml, args)
+	}
+	if v, ok := argValue(args, "--input-directory"); !ok || v != in {
+		t.Fatalf("input dir = %q ok=%v, want %q", v, ok, in)
+	}
+	if v, ok := argValue(args, "--output-directory"); !ok || v != out {
+		t.Fatalf("output dir = %q ok=%v, want %q", v, ok, out)
+	}
+	if !hasArg(args, "--enable-manager") {
+		t.Fatalf("launchArgs not passed through: %v", args)
+	}
+	if _, err := os.Stat(in); err != nil {
+		t.Fatalf("input dir should be created: %v", err)
+	}
+	if _, err := os.Stat(out); err != nil {
+		t.Fatalf("output dir should be created: %v", err)
+	}
+}
+
+// TestComfyLaunchArgsFallbacks covers the missing-file and
+// per-install-storage branches.
+func TestComfyLaunchArgsFallbacks(t *testing.T) {
+	base := t.TempDir()
+	codeDir := filepath.Join(base, "inst1", "ComfyUI")
+	if err := os.MkdirAll(codeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	perInstallIn := filepath.Join(base, "own-in")
+	perInstallOut := filepath.Join(base, "own-out")
+
+	writeRecords := func(t *testing.T, desktop string, extra map[string]any) {
+		t.Helper()
+		rec := map[string]any{
+			"id":          "inst-1",
+			"installPath": filepath.Join(base, "inst1"),
+			"status":      "installed",
+		}
+		for k, v := range extra {
+			rec[k] = v
+		}
+		writeComfyInstallations(t, desktop, []map[string]any{rec})
+	}
+
+	t.Run("shared yaml fallback", func(t *testing.T) {
+		desktop := t.TempDir()
+		writeRecords(t, desktop, nil)
+		shared := filepath.Join(desktop, "shared_model_paths.yaml")
+		if err := os.WriteFile(shared, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("NARTHEX_COMFY_DESKTOP_DIR", desktop)
+		if v, ok := argValue(comfyLaunchArgs(codeDir), "--extra-model-paths-config"); !ok || v != shared {
+			t.Fatalf("expected fallback to %q, got %q ok=%v", shared, v, ok)
+		}
+	})
+
+	t.Run("no model config", func(t *testing.T) {
+		desktop := t.TempDir()
+		writeRecords(t, desktop, nil)
+		t.Setenv("NARTHEX_COMFY_DESKTOP_DIR", desktop)
+		if v, ok := argValue(comfyLaunchArgs(codeDir), "--extra-model-paths-config"); ok {
+			t.Fatalf("expected no model config, got %q", v)
+		}
+	})
+
+	t.Run("per-install input/output", func(t *testing.T) {
+		desktop := t.TempDir()
+		writeRecords(t, desktop, map[string]any{
+			"useSharedInput":  false,
+			"useSharedOutput": false,
+			"inputDir":        perInstallIn,
+			"outputDir":       perInstallOut,
+		})
+		settings, _ := json.Marshal(map[string]string{
+			"inputDir":  filepath.Join(base, "shared-in"),
+			"outputDir": filepath.Join(base, "shared-out"),
+		})
+		if err := os.WriteFile(filepath.Join(desktop, "settings.json"), settings, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("NARTHEX_COMFY_DESKTOP_DIR", desktop)
+		args := comfyLaunchArgs(codeDir)
+		if v, _ := argValue(args, "--input-directory"); v != perInstallIn {
+			t.Fatalf("input dir = %q, want %q", v, perInstallIn)
+		}
+		if v, _ := argValue(args, "--output-directory"); v != perInstallOut {
+			t.Fatalf("output dir = %q, want %q", v, perInstallOut)
+		}
+	})
+
+	t.Run("no desktop dir", func(t *testing.T) {
+		t.Setenv("NARTHEX_COMFY_DESKTOP_DIR", "")
+		// comfyDesktopSupportDir falls back to the real home path; an
+		// unknown code dir yields no record and no args.
+		if args := comfyLaunchArgs(filepath.Join(t.TempDir(), "unknown", "ComfyUI")); len(args) != 0 {
+			t.Fatalf("unknown code dir should add no args, got %v", args)
+		}
+	})
+}
+
+// TestComfyUIStartPassesDesktopArgs verifies startComfyUI forwards the
+// desktop-parity args to the spawned process.
+func TestComfyUIStartPassesDesktopArgs(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not available; needed for the ComfyUI shim")
+	}
+	desktop := t.TempDir()
+	base := t.TempDir()
+	codeDir := filepath.Join(base, "inst1", "ComfyUI")
+	if err := os.MkdirAll(codeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeComfyUIShim(t, codeDir)
+	writeComfyInstallations(t, desktop, []map[string]any{{
+		"id":          "inst-1",
+		"installPath": filepath.Join(base, "inst1"),
+		"status":      "installed",
+		"launchArgs":  "--enable-manager",
+	}})
+	yaml := filepath.Join(desktop, "instance-model-paths", "inst-1.yaml")
+	if err := os.MkdirAll(filepath.Dir(yaml), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(yaml, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	in := filepath.Join(base, "shared-in")
+	out := filepath.Join(base, "shared-out")
+	settings, _ := json.Marshal(map[string]string{"inputDir": in, "outputDir": out})
+	if err := os.WriteFile(filepath.Join(desktop, "settings.json"), settings, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NARTHEX_COMFY_DESKTOP_DIR", desktop)
+
+	logDir := t.TempDir()
+	m := &Manager{Hostname: "127.0.0.1", PortRange: [2]int{4180, 4189}, LogDir: logDir}
+	pid, _, err := m.Start("comfyui", codeDir, "cfargs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop(pid)
+
+	logPath := filepath.Join(logDir, "cfargs.log")
+	deadline := time.Now().Add(5 * time.Second)
+	var logged string
+	for time.Now().Before(deadline) {
+		if b, err := os.ReadFile(logPath); err == nil && strings.Contains(string(b), "ARGV ") {
+			logged = string(b)
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if logged == "" {
+		t.Fatalf("shim did not log its argv: %q", logged)
+	}
+	for _, want := range []string{
+		"--extra-model-paths-config " + yaml,
+		"--input-directory " + in,
+		"--output-directory " + out,
+		"--enable-manager",
+	} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("log %q does not contain %q", logged, want)
+		}
 	}
 }

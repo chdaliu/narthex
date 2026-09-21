@@ -28,6 +28,10 @@ const (
 	// server (OPENCODE_SERVER_USERNAME). It is shown on the opencode card
 	// so users can log in to the web UI.
 	OpencodeUsername = "opencode"
+	// DefaultOpencodeGatewayPort is the fixed port the narthex opencode
+	// reverse-proxy gateway binds by default (top of the opencode range),
+	// so the card "Open" URL stays stable across restarts.
+	DefaultOpencodeGatewayPort = 4399
 	// KindMdbook launches an mdBook documentation server; the card points
 	// at a book project (a directory containing book.toml).
 	KindMdbook = "mdbook"
@@ -58,6 +62,11 @@ type OpencodeConfig struct {
 	Hostname string `json:"hostname"`
 	// PortRange is the range a free port is picked from.
 	PortRange [2]int `json:"portRange"`
+	// GatewayPort is the fixed local port the narthex reverse-proxy
+	// gateway for opencode binds, so the card "Open" URL stays stable
+	// across restarts. When it is occupied a free port is picked instead.
+	// 0 lets the kernel assign an ephemeral port.
+	GatewayPort int `json:"gatewayPort,omitempty"`
 	// Password is the basic-auth password the opencode web server uses
 	// (OPENCODE_SERVER_PASSWORD). Auto-generated on first run; mandatory
 	// because the server binds a non-loopback address.
@@ -162,8 +171,6 @@ type Config struct {
 	Language string `json:"language"`
 	// SessionTTLHours is the session validity in hours (default 720 = 30 days).
 	SessionTTLHours int `json:"sessionTTLHours"`
-	// CompactCards renders the dashboard in compact mode.
-	CompactCards bool `json:"compactCards"`
 	// PageBackground is the dashboard background: a preset id (e.g. bg-05)
 	// or an uploaded image id.
 	PageBackground string `json:"pageBackground"`
@@ -186,15 +193,15 @@ func DefaultConfig() *Config {
 		Port:            9090,
 		Language:        "en",
 		SessionTTLHours: 720,
-		CompactCards:    false,
 		PageBackground:  "bg-05",
 		ComfyUI: ComfyUIConfig{
 			Hostname:  "0.0.0.0",
 			PortRange: [2]int{4100, 4299},
 		},
 		Opencode: OpencodeConfig{
-			Hostname:  "0.0.0.0",
-			PortRange: [2]int{4300, 4499},
+			Hostname:    "0.0.0.0",
+			PortRange:   [2]int{4300, 4499},
+			GatewayPort: DefaultOpencodeGatewayPort,
 		},
 		Mdbook: MdbookConfig{
 			Hostname:  "0.0.0.0",
@@ -265,6 +272,9 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if c.Opencode.PortRange == [2]int{0, 0} {
 		c.Opencode.PortRange = def.Opencode.PortRange
+	}
+	if c.Opencode.GatewayPort == 0 {
+		c.Opencode.GatewayPort = def.Opencode.GatewayPort
 	}
 	if c.Mdbook.Hostname == "" {
 		c.Mdbook.Hostname = def.Mdbook.Hostname

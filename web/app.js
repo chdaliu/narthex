@@ -22,7 +22,6 @@ const grid = $("#grid");
 const empty = $("#empty");
 const btnAdd = $("#btn-add");
 const btnLogout = $("#btn-logout");
-const btnCompact = $("#btn-compact");
 const btnSettings = $("#btn-settings");
 const btnAccount = $("#btn-account");
 const btnMenu = $("#btn-menu");
@@ -33,7 +32,7 @@ const sloganEl = $("#slogan");
 const modalRoot = $("#modal-root");
 const bgEl = $("#bg");
 
-let meta = { icons: [], backgrounds: [], apps: {}, lang: "en", compact: false, pageBackground: "bg-05", slogan: "", internalAddress: "" };
+let meta = { icons: [], backgrounds: [], apps: {}, lang: "en", pageBackground: "bg-05", slogan: "", internalAddress: "", gatewayPort: 0 };
 let cardEls = new Map();
 let bgMap = new Map();
 let lastCards = [];
@@ -171,23 +170,50 @@ function fallbackCopy(value, done) {
 
 /* ---------- background helpers ---------- */
 
+const BG_CACHE = "narthex.background";
+
 function bgUrl(id) {
   return bgMap.get(id) || `/assets/backgrounds/${id}.jpg`;
 }
 
-function applyPageBg(id) {
+// cachedPageBg returns the last rendered background ({id,url}) so the page
+// can paint it immediately, before the session request returns.
+function cachedPageBg() {
+  try { return JSON.parse(localStorage.getItem(BG_CACHE) || "null"); } catch (e) { return null; }
+}
+
+function rememberPageBg(id, url) {
+  try { localStorage.setItem(BG_CACHE, JSON.stringify({ id, url })); } catch (e) { /* storage unavailable */ }
+}
+
+// applyPageBgUrl sets the shared #bg element (login and dashboard use the
+// same one) and preloads the image so the browser caches it.
+function applyPageBgUrl(url) {
+  if (!url) return;
   bgEl.style.backgroundImage =
-    `linear-gradient(rgba(8, 10, 16, 0.10), rgba(8, 10, 16, 0.30)), url("${bgUrl(id)}")`;
+    `linear-gradient(rgba(8, 10, 16, 0.10), rgba(8, 10, 16, 0.30)), url("${url}")`;
+  const img = new Image();
+  img.src = url;
+}
+
+function applyPageBg(id) {
+  const url = bgUrl(id);
+  applyPageBgUrl(url);
+  rememberPageBg(id, url);
+}
+
+// applySessionBg applies the background from /api/session, which carries a
+// resolved URL (uploads included) so the login page can share the
+// dashboard's background before the visitor is authenticated.
+function applySessionBg(data) {
+  const url = data.pageBackgroundUrl || bgUrl(data.pageBackground || "bg-05");
+  applyPageBgUrl(url);
+  if (data.pageBackground) rememberPageBg(data.pageBackground, url);
 }
 
 function updateSlogan() {
   sloganEl.hidden = !meta.slogan;
   sloganEl.textContent = meta.slogan || "";
-}
-
-function updateCompactUI() {
-  grid.classList.toggle("compact", !!meta.compact);
-  btnCompact.textContent = meta.compact ? t("topbar.standard") : t("topbar.compact");
 }
 
 /* ---------- cards ---------- */
@@ -200,7 +226,8 @@ function isTokenKind(kind) {
 
 // credentialRows builds the copyable credential rows of a card. VS Code
 // and VSCodium show a single "Token" row (the server has no username);
-// opencode shows a username and a password.
+// opencode shows a username, a password and the direct API base URL (for
+// remote clients such as `opencode attach` or the SDK).
 function credentialRows(card) {
   const rows = [];
   if (card.username) {
@@ -209,6 +236,9 @@ function credentialRows(card) {
   if (card.password) {
     const label = isTokenKind(card.kind) ? t("card.token") : t("card.password");
     rows.push(`<button type="button" class="pw-row" data-copy="${esc(card.password)}"><span class="pw-label">${label}</span><code>${esc(card.password)}</code></button>`);
+  }
+  if (card.apiUrl) {
+    rows.push(`<button type="button" class="pw-row" data-copy="${esc(card.apiUrl)}"><span class="pw-label">${t("card.api")}</span><code>${esc(card.apiUrl)}</code></button>`);
   }
   return rows.join("");
 }
@@ -223,7 +253,6 @@ function cardEl(card) {
     </div>
     <div class="card-body">
       <div class="card-name" title="${esc(card.name)}">${esc(card.name)}</div>
-      <div class="card-pw" hidden>${credentialRows(card)}</div>
       <div class="status-row">
         <span class="dot"></span>
         <span class="status-spin spinner" hidden></span>
@@ -234,10 +263,6 @@ function cardEl(card) {
       <div class="card-actions">
         <button class="btn start-btn"></button>
         <a class="btn open-btn" target="_blank" rel="noopener"></a>
-        <a class="btn temp-btn" target="_blank" rel="noopener"></a>
-        <span class="spacer"></span>
-        <button class="btn icon-btn edit-btn" title="${t("card.edit")}"><img src="/assets/icons/pencil.svg" alt="${t("card.edit")}"></button>
-        <button class="btn icon-btn del-btn" title="${t("card.delete")}"><img src="/assets/icons/trash-2.svg" alt="${t("card.delete")}"></button>
       </div>
     </div>`;
 
@@ -246,8 +271,6 @@ function cardEl(card) {
     icon: $(".card-icon", el),
     cover: $(".cover-img", el),
     name: $(".card-name", el),
-    pw: $(".card-pw", el),
-    pwRows: Array.from(el.querySelectorAll(".pw-row")),
     dot: $(".dot", el),
     statusSpin: $(".status-spin", el),
     statusText: $(".status-text", el),
@@ -255,15 +278,13 @@ function cardEl(card) {
     uptime: $(".status-uptime", el),
     startBtn: $(".start-btn", el),
     openBtn: $(".open-btn", el),
-    tempBtn: $(".temp-btn", el),
-    editBtn: $(".edit-btn", el),
-    delBtn: $(".del-btn", el),
   };
 
   refs.startBtn.addEventListener("click", () => toggleCard(card.id, refs.card ? refs.card.running : card.running));
-  refs.editBtn.addEventListener("click", () => openEditModal(refs.card || card));
-  refs.delBtn.addEventListener("click", () => removeCard(refs.card || card));
-  refs.pwRows.forEach((row) => row.addEventListener("click", () => copyText(row.dataset.copy, row)));
+  refs.root.addEventListener("click", (e) => {
+    if (e.target.closest("button, a")) return;
+    openCardModal(refs.card || card);
+  });
 
   cardEls.set(card.id, refs);
   updateCardEl(refs, card);
@@ -276,14 +297,7 @@ function updateCardEl(r, card) {
   r.cover.src = bgUrl(card.background);
   r.name.textContent = card.name;
   r.name.title = card.name;
-  r.pw.hidden = !card.username && !card.password;
-  if (card.username || card.password) {
-    r.pwRows.forEach((row) => {
-      const value = row.dataset.copy;
-      row.querySelector("code").textContent = value;
-      row.title = t("card.copyHint");
-    });
-  }
+
   r.dot.classList.toggle("running", card.running);
   r.root.classList.toggle("running", card.running);
   r.statusText.textContent = card.running
@@ -291,18 +305,6 @@ function updateCardEl(r, card) {
     : t("status.stopped");
   r.mem.textContent = card.running ? fmtMem(card.memoryKB) : "";
   r.uptime.textContent = card.running ? fmtUptime(card.uptime) : "";
-  r.editBtn.title = t("card.edit");
-  r.delBtn.title = t("card.delete");
-
-  // The "temporary open" button only makes sense for token kinds
-  // (vscode/vscodium): it opens the card URL WITHOUT the ?tkn= token, so
-  // the browser does not auto-authenticate — in an anonymous/fresh window
-  // VS Code shows its token prompt instead (mirroring a manual login).
-  const tempUrl = (card.url || "").split("?")[0];
-  r.tempBtn.href = tempUrl || "#";
-  r.tempBtn.textContent = t("card.tempOpen");
-  r.tempBtn.title = t("card.tempOpenHint");
-  r.tempBtn.style.display = isTokenKind(card.kind) ? "" : "none";
 
   if (card.running && !card.healthy) {
     r.statusSpin.hidden = false;
@@ -315,9 +317,6 @@ function updateCardEl(r, card) {
     r.openBtn.style.display = "";
     r.openBtn.disabled = true;
     r.openBtn.title = t("status.starting");
-    r.tempBtn.className = "btn temp-btn";
-    r.tempBtn.disabled = true;
-    r.tempBtn.title = t("status.starting");
     return;
   }
   r.statusSpin.hidden = true;
@@ -331,17 +330,13 @@ function updateCardEl(r, card) {
     r.openBtn.textContent = t("card.open");
     r.openBtn.style.display = "";
     r.openBtn.disabled = !card.healthy;
-    r.tempBtn.className = "btn temp-btn";
-    r.tempBtn.disabled = !card.healthy;
+    r.openBtn.title = "";
   } else {
     r.startBtn.className = "btn start";
     r.startBtn.textContent = t("card.start");
     r.startBtn.disabled = false;
     r.openBtn.style.display = "none";
     r.openBtn.href = "#";
-    r.tempBtn.style.display = "none";
-    r.tempBtn.href = "#";
-    r.tempBtn.disabled = true;
   }
 }
 
@@ -442,6 +437,62 @@ function closeModal() {
   modalRoot.innerHTML = "";
 }
 
+/* ---------- card detail modal ---------- */
+
+// detailRows builds the non-secret info rows of the detail modal, skipping
+// any field the card does not carry.
+function detailRows(card) {
+  const rows = [];
+  const status = card.running
+    ? (card.healthy ? t("status.running") : t("status.starting"))
+    : t("status.stopped");
+  rows.push(`<div class="detail-row"><span class="detail-label">${t("card.statusLabel")}</span><span class="detail-value"><span class="dot${card.running ? " running" : ""}"></span>${esc(status)}</span></div>`);
+
+  const app = (meta.apps && meta.apps[card.kind]) || {};
+  rows.push(`<div class="detail-row"><span class="detail-label">${t("card.typeLabel")}</span><span class="detail-value">${esc(app.label || card.kind)}</span></div>`);
+
+  if (card.running && card.uptime > 0) {
+    rows.push(`<div class="detail-row"><span class="detail-label">${t("card.uptimeLabel")}</span><span class="detail-value">${esc(fmtUptime(card.uptime))}</span></div>`);
+  }
+  if (card.running && card.memoryKB > 0) {
+    rows.push(`<div class="detail-row"><span class="detail-label">${t("card.memoryLabel")}</span><span class="detail-value">${esc(fmtMem(card.memoryKB))}</span></div>`);
+  }
+  if (card.dir) {
+    rows.push(`<div class="detail-row"><span class="detail-label">${t("card.dirLabel")}</span><span class="detail-value"><code>${esc(card.dir)}</code></span></div>`);
+  }
+  if (card.port) {
+    rows.push(`<div class="detail-row"><span class="detail-label">${t("card.portLabel")}</span><span class="detail-value"><code>${esc(card.port)}</code></span></div>`);
+  }
+  if (card.url) {
+    rows.push(`<div class="detail-row"><span class="detail-label">${t("card.addressLabel")}</span><span class="detail-value"><a class="detail-link" href="${esc(card.url)}" target="_blank" rel="noopener">${esc(card.url)}</a></span></div>`);
+  }
+  return rows.join("");
+}
+
+// openCardModal shows the card's details (status, runtime info and the
+// copyable credentials) on card click. Credentials and the edit/delete
+// actions are no longer rendered on the card itself.
+function openCardModal(card) {
+  const creds = credentialRows(card);
+  const modal = openModal(`
+    <h2><span class="detail-title"><img class="detail-icon" src="/assets/icons/${card.icon}.svg" alt="">${esc(card.name)}</span> <button type="button" class="modal-close" title="${t("modal.close")}"><img src="/assets/icons/x.svg" alt="${t("modal.close")}"></button></h2>
+    <div class="detail-list">${detailRows(card)}</div>
+    ${creds ? `<div class="detail-creds"><div class="field-label">${t("card.credsLabel")}</div>${creds}</div>` : ""}
+    <div class="modal-actions">
+      <button type="button" class="btn ghost" id="btn-detail-delete">${t("card.delete")}</button>
+      <button type="button" class="btn primary" id="btn-detail-edit">${t("card.edit")}</button>
+    </div>`);
+
+  modal.querySelectorAll(".pw-row").forEach((row) => {
+    row.addEventListener("click", () => copyText(row.dataset.copy, row));
+  });
+  $("#btn-detail-edit", modal).addEventListener("click", () => openEditModal(card));
+  $("#btn-detail-delete", modal).addEventListener("click", () => {
+    closeModal();
+    removeCard(card);
+  });
+}
+
 function iconPickerGrid(selected) {
   const gridEl = document.createElement("div");
   gridEl.className = "picker-grid";
@@ -527,22 +578,28 @@ function kindIcon(kind) {
   }
 }
 
-// availableKinds returns the kinds that can still be added: the app is
-// installed and no card of that kind exists yet.
-function availableKinds() {
-  const kinds = ["comfyui", "opencode", "mdbook", "vscode", "vscodium", "wetty"];
-  return kinds.filter((k) => {
-    const app = meta.apps && meta.apps[k];
-    return app && app.installed && !lastCards.some((c) => c.kind === k);
+// ALL_KINDS is the canonical order of the app types.
+const ALL_KINDS = ["comfyui", "opencode", "mdbook", "vscode", "vscodium", "wetty"];
+
+// kindEntries returns every known kind with whether it can be added and,
+// when it cannot, the i18n key of the reason to show. A kind is
+// unavailable when it already has a card or the app is not installed
+// (meta.apps[kind].reason carries the specific detection reason).
+function kindEntries() {
+  return ALL_KINDS.map((k) => {
+    const app = (meta.apps && meta.apps[k]) || {};
+    if (lastCards.some((c) => c.kind === k)) {
+      return { kind: k, app, available: false, reason: "add.reason.alreadyAdded" };
+    }
+    if (!app.installed) {
+      return { kind: k, app, available: false, reason: app.reason || "add.reason.notInstalled" };
+    }
+    return { kind: k, app, available: true, reason: "" };
   });
 }
 
 async function openAddModal() {
-  const kinds = availableKinds();
-  if (!kinds.length) {
-    alert(t("modal.noneAvailable"));
-    return;
-  }
+  const entries = kindEntries();
   let chosenKind = "";
   let chosenDir = "";         // mdbook project path
   let chosenProjectName = ""; // mdbook project name
@@ -598,24 +655,28 @@ async function openAddModal() {
   const nextBtn = $("#btn-kind-next", modal);
   let iconPicker, bgPicker;
 
-  for (const kind of kinds) {
-    const app = meta.apps[kind];
+  for (const entry of entries) {
+    const kind = entry.kind;
     const item = document.createElement("button");
     item.type = "button";
-    item.className = "kind-item";
     item.id = "kind-" + kind;
+    item.className = "kind-item" + (entry.available ? "" : " disabled");
+    item.disabled = !entry.available;
     item.innerHTML = `
       <img src="/assets/icons/${kindIcon(kind)}.svg" alt="">
       <span>
-        <div>${esc(app.label)}</div>
+        <div>${esc(entry.app.label || kind)}</div>
         <div class="kind-desc">${t("modal.kind" + kind + "Desc")}</div>
+        ${entry.available ? "" : `<div class="kind-reason">${esc(t(entry.reason))}</div>`}
       </span>`;
-    item.addEventListener("click", () => {
-      chosenKind = kind;
-      kindList.querySelectorAll(".kind-item").forEach((el) => el.classList.remove("selected"));
-      item.classList.add("selected");
-      nextBtn.disabled = false;
-    });
+    if (entry.available) {
+      item.addEventListener("click", () => {
+        chosenKind = kind;
+        kindList.querySelectorAll(".kind-item").forEach((el) => el.classList.remove("selected"));
+        item.classList.add("selected");
+        nextBtn.disabled = false;
+      });
+    }
     kindList.appendChild(item);
   }
 
@@ -880,6 +941,40 @@ function settingsBgPicker(container) {
   container.appendChild(gridEl);
 }
 
+// restartNarthex asks the server to restart itself and reloads the page
+// once a new process (a different bootId) answers. The connection drops
+// while the server is restarting, so session polling tolerates errors.
+async function restartNarthex(btn) {
+  let prevBoot = "";
+  try {
+    const s = await api("/api/session");
+    prevBoot = (s && s.bootId) || "";
+  } catch (_) { /* ignore */ }
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = t("modal.restarting");
+  try {
+    await api("/api/restart", { method: "POST", body: "{}" });
+  } catch (_) {
+    // The old process may drop the connection mid-restart; the poll below
+    // is the source of truth.
+  }
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 500));
+    try {
+      const s = await api("/api/session");
+      if (s && s.bootId && s.bootId !== prevBoot) {
+        location.reload();
+        return;
+      }
+    } catch (_) { /* server still restarting */ }
+  }
+  btn.disabled = false;
+  btn.textContent = label;
+  alert(t("modal.restartFailed"));
+}
+
 function buildSettingsModal() {
   const modal = openModal(`
     <h2>${t("modal.settingsTitle")} <button type="button" class="modal-close" title="${t("modal.close")}"><img src="/assets/icons/x.svg" alt="${t("modal.close")}"></button></h2>
@@ -910,11 +1005,21 @@ function buildSettingsModal() {
       <div class="muted" style="font-size:12px;margin-top:4px">${t("modal.internalAddressHint")}</div>
     </div>
     <div>
+      <div class="field-label">${t("modal.gatewayPortLabel")}</div>
+      <input type="number" id="set-gateway-port" min="1" max="65535" placeholder="4399" style="margin-top:6px">
+      <div class="muted" style="font-size:12px;margin-top:4px">${t("modal.gatewayPortHint")}</div>
+    </div>
+    <div>
       <div class="field-label">${t("modal.autostartLabel")}</div>
       <label class="slogan-toggle">
         <input type="checkbox" id="set-autostart-on"> ${t("modal.autostartLabel")}
       </label>
       <div class="muted" style="font-size:12px;margin-top:4px" id="set-autostart-hint">${t("modal.autostartHint")}</div>
+    </div>
+    <div>
+      <div class="field-label">${t("modal.restartLabel")}</div>
+      <button type="button" class="btn ghost" id="btn-restart-now">${t("modal.restartBtn")}</button>
+      <div class="muted" style="font-size:12px;margin-top:4px">${t("modal.restartHint")}</div>
     </div>
     <div class="modal-actions">
       <button type="button" class="btn ghost" id="btn-settings-close">${t("modal.cancel")}</button>
@@ -1009,6 +1114,28 @@ function buildSettingsModal() {
     }, 400);
   });
 
+  const gwPortInput = $("#set-gateway-port", modal);
+  gwPortInput.value = meta.gatewayPort || "";
+  gwPortInput.addEventListener("change", async () => {
+    const value = parseInt(gwPortInput.value, 10);
+    if (!Number.isInteger(value) || value < 1 || value > 65535) {
+      alert(t("err.invalidGatewayPort"));
+      gwPortInput.value = meta.gatewayPort || "";
+      return;
+    }
+    try {
+      const res = await api("/api/settings", {
+        method: "POST",
+        body: JSON.stringify({ gatewayPort: value }),
+      });
+      meta.gatewayPort = res.gatewayPort;
+      gwPortInput.value = res.gatewayPort;
+    } catch (e) {
+      gwPortInput.value = meta.gatewayPort || "";
+      alertErr(e);
+    }
+  });
+
   const autoOn = $("#set-autostart-on", modal);
   const autoHint = $("#set-autostart-hint", modal);
   autoOn.disabled = true;
@@ -1048,6 +1175,9 @@ function buildSettingsModal() {
       autoOn.disabled = false;
     }
   });
+
+  const restartBtn = $("#btn-restart-now", modal);
+  restartBtn.addEventListener("click", () => restartNarthex(restartBtn));
 
   $("#btn-settings-close", modal).addEventListener("click", closeModal);
 }
@@ -1098,19 +1228,6 @@ btnLogout.addEventListener("click", async () => {
 btnAdd.addEventListener("click", () => {
   if (!meta.icons.length) { alert(t("err.loadFailed")); return; }
   openAddModal();
-});
-
-btnCompact.addEventListener("click", async () => {
-  try {
-    await api("/api/settings", {
-      method: "POST",
-      body: JSON.stringify({ compact: !meta.compact }),
-    });
-    meta.compact = !meta.compact;
-    updateCompactUI();
-  } catch (e) {
-    alertErr(e);
-  }
 });
 
 btnSettings.addEventListener("click", () => {
@@ -1237,7 +1354,7 @@ topbarActions.addEventListener("click", () => {
 })();
 
 window.onLangChanged = () => {
-  updateCompactUI();
+  if (lastCards.length) render(lastCards);
 };
 
 async function enterApp() {
@@ -1249,7 +1366,6 @@ async function enterApp() {
   applyI18n(meta.lang || "en");
   applyPageBg(meta.pageBackground || "bg-05");
   updateSlogan();
-  updateCompactUI();
   await loadCards();
   if (!polling) {
     polling = true;
@@ -1258,9 +1374,12 @@ async function enterApp() {
 }
 
 async function init() {
+  const cached = cachedPageBg();
+  if (cached && cached.url) applyPageBgUrl(cached.url);
   try {
     const data = await api("/api/session");
     applyI18n(data.lang || "en");
+    applySessionBg(data);
     if (data.authed) await enterApp();
     else showLogin();
   } catch (e) {

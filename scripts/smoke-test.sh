@@ -216,6 +216,9 @@ grep -qi "detected apps" "$TMP/server.log" || fail "serve should print detected 
 echo "== unauthenticated is rejected =="
 code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/cards")
 [ "$code" = "401" ] || fail "expected 401, got $code"
+# Restart must require a session; an unauthenticated call must never trigger it.
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/api/restart")
+[ "$code" = "401" ] || fail "expected 401 for unauthenticated restart, got $code"
 
 echo "== login =="
 curl -fsS -D "$TMP/login-headers.txt" -o /dev/null -c "$COOKIE" -H 'Content-Type: application/json' \
@@ -251,7 +254,7 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" -H 'Content-Type: app
 [ "$code" = "400" ] || fail "invalid language should be 400, got $code"
 curl -fsS -b "$COOKIE" -H 'Content-Type: application/json' -d '{"language":"en"}' "http://127.0.0.1:$PORT/api/settings" >/dev/null
 
-echo "== upload + page background + compact =="
+echo "== upload + page background =="
 python3 -c "import base64;open('$TMP/t.png','wb').write(base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=='))"
 UPRESP=$(curl -fsS -b "$COOKIE" -F "file=@$TMP/t.png" "http://127.0.0.1:$PORT/api/uploads")
 UPID=$(echo "$UPRESP" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
@@ -261,12 +264,9 @@ curl -fsS -o /dev/null "http://127.0.0.1:$PORT$UPURL" || fail "uploaded image no
 curl -fsS -b "$COOKIE" -H 'Content-Type: application/json' \
   -d "{\"pageBackground\":\"$UPID\"}" "http://127.0.0.1:$PORT/api/settings" >/dev/null || fail "set pageBackground failed"
 curl -fsS -b "$COOKIE" "http://127.0.0.1:$PORT/api/meta" | python3 -c "import sys,json;assert json.load(sys.stdin)['pageBackground']=='$UPID'"
-curl -fsS -b "$COOKIE" -H 'Content-Type: application/json' \
-  -d '{"compact":true}' "http://127.0.0.1:$PORT/api/settings" >/dev/null || fail "set compact failed"
-curl -fsS -b "$COOKIE" "http://127.0.0.1:$PORT/api/meta" | python3 -c 'import sys,json;assert json.load(sys.stdin)["compact"] is True'
 curl -fsS -b "$COOKIE" -X DELETE "http://127.0.0.1:$PORT/api/uploads/$UPID" >/dev/null || fail "delete upload failed"
 curl -fsS -b "$COOKIE" -H 'Content-Type: application/json' \
-  -d '{"pageBackground":"bg-01","compact":false}' "http://127.0.0.1:$PORT/api/settings" >/dev/null
+  -d '{"pageBackground":"bg-01"}' "http://127.0.0.1:$PORT/api/settings" >/dev/null
 
 echo "== slogan =="
 curl -fsS -b "$COOKIE" "http://127.0.0.1:$PORT/api/meta" | python3 -c 'import sys,json;assert json.load(sys.stdin)["slogan"]=="From nothing, to nothing.","default slogan (en)"'
@@ -361,12 +361,29 @@ OC_ENV=$(cat "$TMP/opencode-env.txt")
 echo "$OC_ENV" | grep -q "^opencode|$OCOPENCODE_PW|" || fail "opencode child env wrong: $OC_ENV"
 echo "$OC_ENV" | grep -q "no-open" || fail "opencode child PATH should shadow the browser opener: $OC_ENV"
 echo "$STATUS" | python3 -c "import sys,json;c=[x for x in json.load(sys.stdin)['cards'] if x['id']=='$ID'][0];assert c['password'] and c['username']=='opencode',c"
-echo "$STATUS" | python3 -c "
-import sys, json, re
-c = [x for x in json.load(sys.stdin)['cards'] if x['id'] == sys.argv[1]][0]
-m = re.search(r':(\d+)/$', c['url'])
-assert m and 4300 <= int(m.group(1)) <= 4499, c" "$ID"
+# The "Open" URL points at the narthex gateway (no embedded credentials);
+# the direct endpoint is exposed separately for remote API clients.
+GW_URL=$(echo "$STATUS" | python3 -c "import sys,json;c=[x for x in json.load(sys.stdin)['cards'] if x['id']=='$ID'][0];print(c['url'])")
+API_URL=$(echo "$STATUS" | python3 -c "import sys,json;c=[x for x in json.load(sys.stdin)['cards'] if x['id']=='$ID'][0];print(c.get('apiUrl',''))")
+echo "$GW_URL" | python3 -c "import sys,re;assert re.match(r'^http://127\.0\.0\.1:\d+/$', sys.stdin.read().strip()), '$GW_URL'"
+echo "$API_URL" | python3 -c "import sys,re;assert re.match(r'^http://127\.0\.0\.1:\d+/$', sys.stdin.read().strip()), '$API_URL'"
+# The gateway requires the narthex session and proxies when authenticated;
+# the direct API endpoint answers on its own.
+code=$(curl -s -o /dev/null -w '%{http_code}' "$GW_URL")
+[ "$code" = "302" ] || fail "unauthenticated gateway should redirect, got $code"
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" "$GW_URL")
+[ "$code" = "200" ] || fail "authenticated gateway should proxy, got $code"
+code=$(curl -s -o /dev/null -w '%{http_code}' "$API_URL")
+[ "$code" = "200" ] || fail "direct opencode API endpoint should answer, got $code"
 curl -fsS -b "$COOKIE" -X POST "http://127.0.0.1:$PORT/api/cards/$ID/stop" >/dev/null || fail "opencode stop failed"
+# Stopping opencode must also tear the gateway down (no lingering socket).
+GW_PORT=$(echo "$GW_URL" | python3 -c "import sys,re;m=re.search(r':(\d+)/$',sys.stdin.read().strip());print(m.group(1))")
+for _ in $(seq 1 20); do
+  code=$(curl -s -o /dev/null -w '%{http_code}' "$GW_URL" || true)
+  [ "$code" = "000" ] && break
+  sleep 0.25
+done
+[ "$code" = "000" ] || fail "gateway still listening on $GW_PORT after opencode stop: $code"
 curl -fsS -b "$COOKIE" -X DELETE "http://127.0.0.1:$PORT/api/cards/$ID" >/dev/null || fail "opencode delete failed"
 
 echo "== mdbook projects API =="

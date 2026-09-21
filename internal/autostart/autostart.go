@@ -177,6 +177,7 @@ var (
 	fnBootstrap func(domain, plistPath string) error                   = realBootstrap
 	fnBootout   func(domain, label string) error                       = realBootout
 	fnLoaded    func(domain, label string) bool                        = realLoaded
+	fnKickstart func(target string) error                              = realKickstart
 	fnWriteFile func(path string, data []byte, perm os.FileMode) error = os.WriteFile
 	fnRemove    func(path string) error                                = os.Remove
 	fnStat      func(path string) (os.FileInfo, error)                 = os.Stat
@@ -208,6 +209,14 @@ func realBootout(domain, label string) error {
 
 func realLoaded(domain, label string) bool {
 	return exec.Command("launchctl", "print", domain+"/"+label).Run() == nil
+}
+
+func realKickstart(target string) error {
+	out, err := exec.Command("launchctl", "kickstart", "-k", target).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("launchctl kickstart: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
 }
 
 // precheck enforces the platform requirements shared by
@@ -267,6 +276,17 @@ func Uninstall(spec Spec) (InstallStatus, error) {
 		return InstallStatus{}, fmt.Errorf("remove plist: %w", err)
 	}
 	return InstallStatus{Installed: false, Loaded: false, Label: Label(spec), PlistPath: plistPath}, nil
+}
+
+// Restart asks launchd to restart the loaded job in place
+// (launchctl kickstart -k). The job must already be installed and loaded;
+// launchd relaunches it from the plist's ProgramArguments, so a freshly
+// built binary at that path takes effect.
+func Restart(spec Spec) error {
+	if err := precheck(spec); err != nil {
+		return err
+	}
+	return fnKickstart(domainLabel(spec) + "/" + Label(spec))
 }
 
 // Status reports whether the plist exists and whether launchd has the job

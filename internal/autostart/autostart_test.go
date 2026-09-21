@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -24,6 +25,8 @@ type fakes struct {
 	bootoutCalls   []struct{ domain, label string }
 	loadedResult   bool
 	loadedCalls    []struct{ domain, label string }
+	kickstartCalls []string
+	kickstartErr   error
 	files          map[string][]byte
 	mkdirs         []string
 }
@@ -36,6 +39,7 @@ func withFakes(t *testing.T, f *fakes) {
 	prevBootstrap := fnBootstrap
 	prevBootout := fnBootout
 	prevLoaded := fnLoaded
+	prevKickstart := fnKickstart
 	prevWrite := fnWriteFile
 	prevRemove := fnRemove
 	prevStat := fnStat
@@ -51,6 +55,10 @@ func withFakes(t *testing.T, f *fakes) {
 	fnLoaded = func(domain, label string) bool {
 		f.loadedCalls = append(f.loadedCalls, struct{ domain, label string }{domain, label})
 		return f.loadedResult
+	}
+	fnKickstart = func(target string) error {
+		f.kickstartCalls = append(f.kickstartCalls, target)
+		return f.kickstartErr
 	}
 	fnWriteFile = func(path string, data []byte, _ os.FileMode) error {
 		f.files[path] = data
@@ -77,6 +85,7 @@ func withFakes(t *testing.T, f *fakes) {
 		fnBootstrap = prevBootstrap
 		fnBootout = prevBootout
 		fnLoaded = prevLoaded
+		fnKickstart = prevKickstart
 		fnWriteFile = prevWrite
 		fnRemove = prevRemove
 		fnStat = prevStat
@@ -329,5 +338,37 @@ func TestStatus(t *testing.T) {
 	}
 	if len(f.loadedCalls) != 0 {
 		t.Errorf("launchctl should not be called when plist absent, got %v", f.loadedCalls)
+	}
+}
+
+func TestRestart(t *testing.T) {
+	withDarwin(t)
+	f := &fakes{}
+	withFakes(t, f)
+
+	if err := Restart(Spec{Kind: KindServe}); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.kickstartCalls) != 1 {
+		t.Fatalf("kickstart calls = %v, want 1", f.kickstartCalls)
+	}
+	want := "gui/" + strconv.Itoa(os.Getuid()) + "/com.narthex.serve"
+	if f.kickstartCalls[0] != want {
+		t.Errorf("kickstart target = %q, want %q", f.kickstartCalls[0], want)
+	}
+
+	// A launchctl failure is surfaced to the caller.
+	f.kickstartErr = errors.New("boom")
+	if err := Restart(Spec{Kind: KindServe}); err == nil {
+		t.Error("expected kickstart failure to be returned")
+	}
+}
+
+func TestRestartRejectsNonDarwin(t *testing.T) {
+	if fnIsDarwin() {
+		t.Skip("only runs on non-darwin")
+	}
+	if err := Restart(Spec{Kind: KindServe}); !errors.Is(err, ErrUnsupportedOS) {
+		t.Errorf("expected ErrUnsupportedOS, got %v", err)
 	}
 }

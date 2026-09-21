@@ -13,6 +13,7 @@ import (
 // HandleListCards returns all cards enriched with live status.
 func (s *Service) HandleListCards(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
+	s.reconcileGatewayLocked()
 	cards := make([]CardView, 0, len(s.State.Cards))
 	for _, c := range s.State.Cards {
 		cards = append(cards, s.view(c, r.Host))
@@ -137,6 +138,7 @@ func (s *Service) HandleDeleteCard(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, "err.saveFailed", err.Error())
 		return
 	}
+	s.reconcileGatewayLocked()
 	WriteJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -153,6 +155,7 @@ func (s *Service) HandleStartCard(w http.ResponseWriter, r *http.Request) {
 	}
 	card := &s.State.Cards[idx]
 	if s.Backend.Status(card.Kind, card.PID, card.Port).Alive {
+		s.reconcileGatewayLocked()
 		WriteJSON(w, http.StatusOK, s.view(*card, r.Host))
 		return
 	}
@@ -174,6 +177,7 @@ func (s *Service) HandleStartCard(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, "err.saveFailed", err.Error())
 		return
 	}
+	s.reconcileGatewayLocked()
 	WriteJSON(w, http.StatusOK, s.view(*card, r.Host))
 }
 
@@ -198,6 +202,7 @@ func (s *Service) HandleStopCard(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, "err.saveFailed", err.Error())
 		return
 	}
+	s.reconcileGatewayLocked()
 	WriteJSON(w, http.StatusOK, s.view(*card, r.Host))
 }
 
