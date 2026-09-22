@@ -36,6 +36,7 @@ func (s *Server) Handler() http.Handler {
 	protected := http.NewServeMux()
 	protected.HandleFunc("GET /api/cards", s.svc.HandleListCards)
 	protected.HandleFunc("POST /api/cards", s.svc.HandleCreateCard)
+	protected.HandleFunc("POST /api/cards/reorder", s.svc.HandleReorderCards)
 	protected.HandleFunc("PATCH /api/cards/{id}", s.svc.HandlePatchCard)
 	protected.HandleFunc("DELETE /api/cards/{id}", s.svc.HandleDeleteCard)
 	protected.HandleFunc("POST /api/cards/{id}/start", s.svc.HandleStartCard)
@@ -52,9 +53,25 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("DELETE /api/uploads/{id}", s.svc.HandleUploadDelete)
 	mux.Handle("/api/", s.authMiddleware(protected))
 
+	// The running mdBook server is proxied same-origin on the dashboard
+	// listener so it is reachable through the same reverse proxy / tunnel
+	// as narthex, with no extra port to expose. mdBook's live-reload
+	// websocket lives at a root-absolute path, so it is routed here too.
+	mdbook := s.MdbookHandler()
+	mux.Handle(gateway.MdbookPrefix+"/", mdbook)
+	mux.Handle("/__livereload", mdbook)
+
 	mux.Handle("/uploads/", s.uploadsHandler())
 	mux.Handle("/", staticHandler())
 	return mux
+}
+
+// MdbookHandler returns the same-origin reverse-proxy handler for the
+// running mdBook server (see gateway.MdbookHandler).
+func (s *Server) MdbookHandler() http.Handler {
+	return gateway.MdbookHandler(s.cfg, s.svc.Lang, func() (string, bool) {
+		return s.svc.MdbookGatewayTarget()
+	})
 }
 
 // GatewayHandler returns the opencode reverse-proxy handler. It is served

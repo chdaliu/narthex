@@ -376,14 +376,16 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" "$GW_URL")
 code=$(curl -s -o /dev/null -w '%{http_code}' "$API_URL")
 [ "$code" = "200" ] || fail "direct opencode API endpoint should answer, got $code"
 curl -fsS -b "$COOKIE" -X POST "http://127.0.0.1:$PORT/api/cards/$ID/stop" >/dev/null || fail "opencode stop failed"
-# Stopping opencode must also tear the gateway down (no lingering socket).
+# Stopping opencode keeps the gateway listener bound (whole serve lifetime)
+# so a stale tab gets a login redirect or a stopped page instead of a
+# connection-refused blank page.
 GW_PORT=$(echo "$GW_URL" | python3 -c "import sys,re;m=re.search(r':(\d+)/$',sys.stdin.read().strip());print(m.group(1))")
-for _ in $(seq 1 20); do
-  code=$(curl -s -o /dev/null -w '%{http_code}' "$GW_URL" || true)
-  [ "$code" = "000" ] && break
-  sleep 0.25
-done
-[ "$code" = "000" ] || fail "gateway still listening on $GW_PORT after opencode stop: $code"
+code=$(curl -s -o /dev/null -w '%{http_code}' "$GW_URL" || true)
+[ "$code" = "302" ] || fail "gateway after stop should redirect unauthenticated, got $code"
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" "$GW_URL")
+[ "$code" = "503" ] || fail "gateway after stop should serve a stopped page, got $code"
+body=$(curl -s -b "$COOKIE" "$GW_URL")
+echo "$body" | grep -q "http://127.0.0.1:$PORT/" || fail "stopped page missing dashboard link: $body"
 curl -fsS -b "$COOKIE" -X DELETE "http://127.0.0.1:$PORT/api/cards/$ID" >/dev/null || fail "opencode delete failed"
 
 echo "== mdbook projects API =="
@@ -420,6 +422,12 @@ for _ in $(seq 1 40); do
   sleep 0.5
 done
 [ "$RUN" = "yes" ] || { echo "$STATUS"; fail "mdbook did not become running"; }
+# The card "Open" URL is same-origin and the book is proxied on the
+# dashboard listener (no extra port to expose).
+echo "$STATUS" | python3 -c "import sys,json;c=[x for x in json.load(sys.stdin)['cards'] if x['id']=='$ID'][0];assert c['url']=='/mdbook/',c"
+code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/mdbook/")
+[ "$code" = "302" ] || fail "unauthenticated mdbook proxy should redirect, got $code"
+curl -fsS -b "$COOKIE" "http://127.0.0.1:$PORT/mdbook/" >/dev/null || fail "mdbook same-origin proxy failed"
 curl -fsS -b "$COOKIE" -X POST "http://127.0.0.1:$PORT/api/cards/$ID/stop" >/dev/null || fail "mdbook stop failed"
 curl -fsS -b "$COOKIE" -X DELETE "http://127.0.0.1:$PORT/api/cards/$ID" >/dev/null || fail "mdbook delete failed"
 

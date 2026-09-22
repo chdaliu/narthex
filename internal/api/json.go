@@ -7,9 +7,12 @@ import (
 	"net/http"
 )
 
-// WriteJSON encodes v as JSON with the given status code.
+// WriteJSON encodes v as JSON with the given status code. API responses
+// must never be cached: a stale /api/session or card list would otherwise
+// survive an expiry or a logout.
 func WriteJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(code)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		log.Printf("write json: %v", err)

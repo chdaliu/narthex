@@ -202,11 +202,43 @@ input:focus { border-color: var(--accent); }
   flex-direction: column;
   transition: transform .2s, box-shadow .2s;
   animation: rise .3s ease;
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
+
+.card img { -webkit-user-drag: none; }
 
 .card:hover {
   transform: translateY(-3px);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+}
+
+/* ---------- card drag sorting ---------- */
+
+body.card-drag-active {
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: grabbing;
+}
+
+body.card-drag-active .card { animation: none; }
+
+.card-dragging {
+  opacity: .35;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+.card-drag-ghost {
+  position: fixed;
+  z-index: 1000;
+  margin: 0;
+  pointer-events: none;
+  animation: none;
+  transform: rotate(2deg) scale(1.03);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5);
+  opacity: .95;
 }
 
 .card-cover {
@@ -525,6 +557,19 @@ input:focus { border-color: var(--accent); }
 }
 
 @media (max-width: 768px) {
+  /* iOS Safari zooms the whole page when a form control is focused while
+     its font-size is below 16px. Keep controls at 16px on phones so
+     logging in (or opening a select) does not leave the dashboard zoomed
+     in, forcing the user to pinch back out. */
+  input[type="text"],
+  input[type="password"],
+  input:not([type]),
+  select,
+  textarea,
+  .lang-select {
+    font-size: 16px;
+  }
+
   .menu-btn { display: inline-flex; }
 
   .brand { flex-wrap: wrap; row-gap: 2px; }

@@ -79,15 +79,19 @@ type Service struct {
 	// restart so the UI can tell the new process apart from the old one.
 	BootID string
 	// GatewayPort is the port the opencode reverse-proxy gateway listens
-	// on while the opencode card runs; 0 when it is stopped (card URLs
-	// then fall back to the opencode port directly). Managed by
+	// on; 0 until the listener is bound. It is bound for the whole serve
+	// lifetime so a stale tab always gets an HTTP answer. Managed by
 	// reconcileGateway and wired up in cmd/narthex.
 	GatewayPort int
 	// GatewayHandler builds the opencode gateway handler; injected in
 	// cmd/narthex. When nil (tests), the gateway lifecycle is a no-op.
 	GatewayHandler func() http.Handler
-	// gw is the opencode gateway listener, started/stopped with the card.
+	// gw is the opencode gateway listener, bound for the serve lifetime.
 	gw gateway.Server
+	// gwWanted is the desired gateway port at the time the listener was
+	// bound; a difference from the configured port marks a pending change
+	// that is applied once the opencode card is restarted.
+	gwWanted int
 }
 
 // NewService builds a Service. State and config are already loaded by the
@@ -153,56 +157,71 @@ func (s *Service) OpencodeGatewayTarget() (addr, user, pass string, ok bool) {
 	return "", "", "", false
 }
 
-// ReconcileGateway syncs the opencode gateway listener with the card
-// state. Called at serve startup (an opencode process may still be alive
-// from a previous run) and by the card handlers.
+// MdbookGatewayTarget resolves the running mdBook server for the
+// same-origin proxy: the loopback address of the running mdBook card. ok is
+// false when no mdBook card is running.
+func (s *Service) MdbookGatewayTarget() (addr string, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, c := range s.State.Cards {
+		if c.Kind != store.KindMdbook || c.Port <= 0 {
+			continue
+		}
+		if !s.Backend.Status(c.Kind, c.PID, c.Port).Alive {
+			return "", false
+		}
+		return net.JoinHostPort("127.0.0.1", strconv.Itoa(c.Port)), true
+	}
+	return "", false
+}
+
+// ReconcileGateway binds the opencode gateway listener if it is not bound
+// yet. Called at serve startup and by the card handlers. The listener
+// stays bound for the whole serve lifetime: when opencode is not running
+// the gateway answers a stopped page (or a login redirect), so a stale tab
+// never lands on a connection-refused blank page.
 func (s *Service) ReconcileGateway() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.reconcileGatewayLocked()
 }
 
-// reconcileGatewayLocked starts the gateway while an opencode card is
-// alive and stops it otherwise, so no listener or goroutine lingers after
-// opencode stops. Caller holds s.mu.
+// Shutdown releases the gateway listener. It is used by tests; a running
+// serve exits without needing it.
+func (s *Service) Shutdown() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.gw.Stop()
+	s.GatewayPort = 0
+	s.gwWanted = 0
+}
+
+// reconcileGatewayLocked binds the gateway if it is not bound, and rebinds
+// it when the configured port changed while no opencode instance was using
+// the current listener. A running opencode card keeps the bound port until
+// it is restarted, so changing the port never drops a live session.
+// Caller holds s.mu.
 func (s *Service) reconcileGatewayLocked() {
 	if s.GatewayHandler == nil {
 		return
 	}
-	alive := false
-	for _, c := range s.State.Cards {
-		if c.Kind == store.KindOpencode {
-			alive = s.Backend.Status(c.Kind, c.PID, c.Port).Alive
-			break
-		}
-	}
-	if alive {
-		if s.gw.Port() == 0 {
-			want := s.Config.Opencode.GatewayPort
-			p, err := s.gw.Start(s.Config.Hostname, want, s.GatewayHandler())
-			if err != nil {
-				log.Printf("gateway: %v", err)
-			} else {
-				s.GatewayPort = p
-				if want > 0 && p != want {
-					log.Printf("gateway: port %d in use, using %d instead", want, p)
-				}
-			}
-		}
-	} else if s.gw.Port() != 0 {
-		s.gw.Stop()
-		s.GatewayPort = 0
-	}
-}
-
-// restartGatewayLocked rebinds the opencode gateway so a changed port takes
-// effect immediately. Caller holds s.mu.
-func (s *Service) restartGatewayLocked() {
+	want := s.Config.Opencode.GatewayPort
 	if s.gw.Port() != 0 {
+		if s.gwWanted == want || s.opencodeRunningLocked() {
+			return
+		}
 		s.gw.Stop()
 		s.GatewayPort = 0
 	}
-	s.reconcileGatewayLocked()
+	p, err := s.gw.Start(s.Config.Hostname, want, s.GatewayHandler())
+	if err != nil {
+		log.Printf("gateway: %v", err)
+		return
+	}
+	s.GatewayPort, s.gwWanted = p, want
+	if want > 0 && p != want {
+		log.Printf("gateway: port %d in use, using %d instead", want, p)
+	}
 }
 
 // writeError sends a localized error response. args are applied to the
@@ -274,6 +293,13 @@ func (s *Service) view(c store.Card, reqHost string) CardView {
 // the VS Code-family kinds append their connection token (`?tkn=`)
 // because the server answers 403 without it.
 func (s *Service) instanceURL(reqHost, kind string, port int) string {
+	if kind == store.KindMdbook {
+		// mdBook is proxied same-origin under the dashboard listener, so
+		// the book is reachable through the same reverse proxy / tunnel as
+		// narthex with no extra port to expose. The root-relative URL
+		// keeps working behind any host or scheme.
+		return gateway.MdbookPrefix + "/"
+	}
 	if kind == store.KindOpencode && s.GatewayPort > 0 {
 		port = s.GatewayPort
 	}
@@ -616,6 +642,9 @@ func (s *Service) HandleSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if p != s.Config.Opencode.GatewayPort {
+			// Saved immediately. A running opencode card keeps the bound
+			// port (see reconcileGatewayLocked); the new port applies once
+			// the card is restarted.
 			s.Config.Opencode.GatewayPort = p
 			gatewayChanged = true
 		}
@@ -625,7 +654,7 @@ func (s *Service) HandleSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if gatewayChanged {
-		s.restartGatewayLocked()
+		s.reconcileGatewayLocked()
 	}
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"language":        s.Config.Language,

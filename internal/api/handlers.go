@@ -65,6 +65,7 @@ func (s *Service) HandleCreateCard(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.reconcileGatewayLocked()
 	for _, c := range s.State.Cards {
 		if c.Kind == kind {
 			s.writeError(w, http.StatusConflict, "err.duplicateKind", kindLabel(kind))
@@ -119,6 +120,47 @@ func (s *Service) HandlePatchCard(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, s.view(*card, r.Host))
 }
 
+// HandleReorderCards persists a new card order. The request carries the
+// card IDs in their desired order; unknown or duplicate IDs are ignored,
+// and any card not mentioned keeps its relative position at the end. The
+// order lives in the card slice itself, so it is persisted with the state.
+func (s *Service) HandleReorderCards(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		s.writeError(w, http.StatusBadRequest, "err.invalidRequest")
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	byID := make(map[string]store.Card, len(s.State.Cards))
+	for _, c := range s.State.Cards {
+		byID[c.ID] = c
+	}
+	ordered := make([]store.Card, 0, len(s.State.Cards))
+	seen := make(map[string]bool, len(s.State.Cards))
+	for _, id := range req.IDs {
+		c, ok := byID[id]
+		if !ok || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ordered = append(ordered, c)
+	}
+	for _, c := range s.State.Cards {
+		if !seen[c.ID] {
+			ordered = append(ordered, c)
+		}
+	}
+	s.State.Cards = ordered
+	if err := s.save(); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "err.saveFailed", err.Error())
+		return
+	}
+	WriteJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 // HandleDeleteCard stops the instance (if any) and removes the card.
 func (s *Service) HandleDeleteCard(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -130,6 +172,13 @@ func (s *Service) HandleDeleteCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	card := s.State.Cards[idx]
+	// A running instance must be stopped first: deleting it out from under
+	// the user hides the fact that the process is being killed and can lose
+	// unsaved work in the app.
+	if s.Backend.Status(card.Kind, card.PID, card.Port).Alive {
+		s.writeError(w, http.StatusConflict, "err.cardRunning")
+		return
+	}
 	if card.PID > 0 {
 		s.Backend.Stop(card.PID)
 	}
@@ -213,6 +262,17 @@ func (s *Service) findCard(id string) int {
 		}
 	}
 	return -1
+}
+
+// opencodeRunningLocked reports whether the opencode card currently has a
+// live instance. Caller holds s.mu.
+func (s *Service) opencodeRunningLocked() bool {
+	for _, c := range s.State.Cards {
+		if c.Kind == store.KindOpencode {
+			return s.Backend.Status(c.Kind, c.PID, c.Port).Alive
+		}
+	}
+	return false
 }
 
 // appInstalled reports whether the desktop app for kind is installed on

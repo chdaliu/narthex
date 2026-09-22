@@ -288,6 +288,31 @@ autostart 參數:
 		ZHCN: "opencode 未运行",
 		ZHTW: "opencode 未執行",
 	},
+	"gateway.stoppedTitle": {
+		EN:   "opencode is not running",
+		ZHCN: "opencode 未运行",
+		ZHTW: "opencode 未執行",
+	},
+	"gateway.stoppedBody": {
+		EN:   "The opencode service has stopped. Returning to the Narthex dashboard...",
+		ZHCN: "opencode 服务已停止,正在返回 Narthex 面板...",
+		ZHTW: "opencode 服務已停止,正在返回 Narthex 面板...",
+	},
+	"gateway.backToDashboard": {
+		EN:   "Back to dashboard",
+		ZHCN: "返回面板",
+		ZHTW: "返回面板",
+	},
+	"gateway.mdbookStoppedTitle": {
+		EN:   "mdBook is not running",
+		ZHCN: "mdBook 未运行",
+		ZHTW: "mdBook 未執行",
+	},
+	"gateway.mdbookStoppedBody": {
+		EN:   "The mdBook service has stopped. Returning to the Narthex dashboard...",
+		ZHCN: "mdBook 服务已停止,正在返回 Narthex 面板...",
+		ZHTW: "mdBook 服務已停止,正在返回 Narthex 面板...",
+	},
 	"err.sloganTooLong": {
 		EN:   "slogan must be 80 characters or fewer",
 		ZHCN: "标语最长 80 个字符",
@@ -302,6 +327,11 @@ autostart 參數:
 		EN:   "invalid gateway port (1-65535, and not the dashboard port)",
 		ZHCN: "无效的网关端口(1-65535,且不能是面板端口)",
 		ZHTW: "無效的閘道連接埠(1-65535,且不能是面板連接埠)",
+	},
+	"err.cardRunning": {
+		EN:   "stop the instance before deleting the card",
+		ZHCN: "请先停止实例再删除卡片",
+		ZHTW: "請先停止執行個體再刪除卡片",
 	},
 	"err.mdbookNoProject": {
 		EN:   "the selected directory is not a recognized mdBook project (create the book first)",

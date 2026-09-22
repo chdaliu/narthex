@@ -2,6 +2,7 @@ package gateway_test
 
 import (
 	"encoding/base64"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -30,7 +31,12 @@ func hostOf(ts *httptest.Server) string {
 
 func doGet(t *testing.T, h http.Handler, cookie, host string) *http.Response {
 	t.Helper()
-	req := httptest.NewRequest("GET", "http://"+host+"/", nil)
+	return doGetPath(t, h, cookie, host, "/")
+}
+
+func doGetPath(t *testing.T, h http.Handler, cookie, host, path string) *http.Response {
+	t.Helper()
+	req := httptest.NewRequest("GET", "http://"+host+path, nil)
 	req.Host = host
 	if cookie != "" {
 		req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: cookie})
@@ -53,6 +59,21 @@ func TestGatewayRedirectsUnauthenticated(t *testing.T) {
 	}
 }
 
+func TestGatewayRedirectHonorsInternalAddress(t *testing.T) {
+	cfg := testConfig()
+	cfg.InternalAddress = "10.0.0.5"
+	h := gateway.Handler(cfg, func() i18n.Lang { return i18n.EN },
+		func() (gateway.Target, bool) { return gateway.Target{}, false })
+
+	res := doGet(t, h, "", "192.168.1.9:5199")
+	if res.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302", res.StatusCode)
+	}
+	if loc := res.Header.Get("Location"); loc != "http://10.0.0.5:9090/" {
+		t.Fatalf("redirect = %q", loc)
+	}
+}
+
 func TestGatewayUnavailableWithoutTarget(t *testing.T) {
 	h := gateway.Handler(testConfig(), func() i18n.Lang { return i18n.EN },
 		func() (gateway.Target, bool) { return gateway.Target{}, false })
@@ -60,6 +81,13 @@ func TestGatewayUnavailableWithoutTarget(t *testing.T) {
 	res := doGet(t, h, sessionCookie(), "127.0.0.1:5199")
 	if res.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", res.StatusCode)
+	}
+	if ct := res.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Fatalf("content type = %q, want text/html", ct)
+	}
+	body, _ := io.ReadAll(res.Body)
+	if !strings.Contains(string(body), "http://127.0.0.1:9090/") {
+		t.Fatalf("stopped page missing dashboard link: %s", body)
 	}
 }
 
@@ -112,6 +140,93 @@ func TestGatewayBadGatewayWhenUpstreamDown(t *testing.T) {
 	res := doGet(t, h, sessionCookie(), "127.0.0.1:5199")
 	if res.StatusCode != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502", res.StatusCode)
+	}
+}
+
+func TestMdbookRedirectsUnauthenticated(t *testing.T) {
+	h := gateway.MdbookHandler(testConfig(), func() i18n.Lang { return i18n.EN },
+		func() (string, bool) { return "", false })
+
+	res := doGetPath(t, h, "", "192.168.1.9:9090", "/mdbook/")
+	if res.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302", res.StatusCode)
+	}
+	if loc := res.Header.Get("Location"); loc != "http://192.168.1.9:9090/" {
+		t.Fatalf("redirect = %q", loc)
+	}
+}
+
+func TestMdbookStoppedPage(t *testing.T) {
+	h := gateway.MdbookHandler(testConfig(), func() i18n.Lang { return i18n.EN },
+		func() (string, bool) { return "", false })
+
+	res := doGetPath(t, h, sessionCookie(), "127.0.0.1:9090", "/mdbook/")
+	if res.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", res.StatusCode)
+	}
+	body, _ := io.ReadAll(res.Body)
+	if !strings.Contains(string(body), "http://127.0.0.1:9090/") {
+		t.Fatalf("stopped page missing dashboard link: %s", body)
+	}
+}
+
+func TestMdbookProxiesAndStripsPrefix(t *testing.T) {
+	var gotPath, gotCookie string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotCookie = r.Header.Get("Cookie")
+		w.Write([]byte("book"))
+	}))
+	defer upstream.Close()
+
+	h := gateway.MdbookHandler(testConfig(), func() i18n.Lang { return i18n.EN },
+		func() (string, bool) { return hostOf(upstream), true })
+
+	res := doGetPath(t, h, sessionCookie(), "127.0.0.1:9090", "/mdbook/chapter_1.html")
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", res.StatusCode)
+	}
+	if gotPath != "/chapter_1.html" {
+		t.Fatalf("upstream path = %q, want /chapter_1.html", gotPath)
+	}
+	if gotCookie != "" {
+		t.Fatalf("narthex session cookie leaked upstream: %q", gotCookie)
+	}
+}
+
+func TestMdbookPrefixRootMapsToUpstreamRoot(t *testing.T) {
+	var gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+	}))
+	defer upstream.Close()
+
+	h := gateway.MdbookHandler(testConfig(), func() i18n.Lang { return i18n.EN },
+		func() (string, bool) { return hostOf(upstream), true })
+
+	if res := doGetPath(t, h, sessionCookie(), "127.0.0.1:9090", "/mdbook/"); res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", res.StatusCode)
+	}
+	if gotPath != "/" {
+		t.Fatalf("upstream path = %q, want /", gotPath)
+	}
+}
+
+func TestMdbookLivereloadPathPassesThrough(t *testing.T) {
+	var gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+	}))
+	defer upstream.Close()
+
+	h := gateway.MdbookHandler(testConfig(), func() i18n.Lang { return i18n.EN },
+		func() (string, bool) { return hostOf(upstream), true })
+
+	if res := doGetPath(t, h, sessionCookie(), "127.0.0.1:9090", "/__livereload"); res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", res.StatusCode)
+	}
+	if gotPath != "/__livereload" {
+		t.Fatalf("upstream path = %q, want /__livereload", gotPath)
 	}
 }
 

@@ -12,6 +12,7 @@ const I18N = {
     "login.errTooMany": "Too many attempts, try again in 60 seconds",
     "login.errOffline": "Cannot reach the server or login failed",
     "login.errCredentials": "Invalid username or password",
+    "login.sessionExpired": "Your session has expired, please sign in again",
     "login.username": "Username",
 
 
@@ -67,6 +68,7 @@ const I18N = {
     "modal.internalAddressHint": "Host (IP or hostname) other devices use to reach the services. Leave empty to use the address you opened Narthex from.",
     "modal.gatewayPortLabel": "opencode gateway port",
     "modal.gatewayPortHint": "Fixed local port for the narthex gateway (the opencode \"Open\" address). A free port is used instead when it is occupied. Applied immediately.",
+    "modal.gatewayPortRunningHint": "Restart the opencode card for the new port to take effect.",
 
     "topbar.account": "Account",
 
@@ -95,6 +97,7 @@ const I18N = {
     "card.open": "Open",
     "card.edit": "Edit",
     "card.delete": "Delete",
+    "card.stopToDelete": "Stop the instance before deleting",
     "card.user": "User",
     "card.password": "Password",
     "card.token": "Token",
@@ -121,7 +124,6 @@ const I18N = {
     "modal.cancel": "Cancel",
 
     "confirm.delete": "Delete card \u201c{0}\u201d?",
-    "confirm.stop": "The instance will be stopped.",
 
     "uptime.s": "{0} sec",
     "uptime.m": "{0} min",
@@ -140,6 +142,7 @@ const I18N = {
     "login.errTooMany": "尝试次数过多,请 60 秒后再试",
     "login.errOffline": "无法连接服务器或登录失败",
     "login.errCredentials": "账号或密码错误",
+    "login.sessionExpired": "登录状态已失效,请重新登录",
     "login.username": "用户名",
 
 
@@ -195,6 +198,7 @@ const I18N = {
     "modal.internalAddressHint": "其它设备访问服务所用的主机(IP 或域名)。留空则沿用你打开 Narthex 时所用的地址。",
     "modal.gatewayPortLabel": "opencode 网关端口",
     "modal.gatewayPortHint": "narthex 网关(opencode「打开」地址)使用的固定本地端口;被占用时自动改用空闲端口,修改即时生效。",
+    "modal.gatewayPortRunningHint": "重启 opencode 卡片后新端口才会生效。",
 
     "topbar.account": "账号",
 
@@ -223,6 +227,7 @@ const I18N = {
     "card.open": "打开",
     "card.edit": "编辑",
     "card.delete": "删除",
+    "card.stopToDelete": "请先停止实例再删除",
     "card.user": "用户名",
     "card.password": "密码",
     "card.token": "令牌",
@@ -249,7 +254,6 @@ const I18N = {
     "modal.cancel": "取消",
 
     "confirm.delete": "删除卡片「{0}」?",
-    "confirm.stop": "实例将被停止。",
 
     "uptime.s": "{0} 秒",
     "uptime.m": "{0} 分钟",
@@ -268,6 +272,7 @@ const I18N = {
     "login.errTooMany": "嘗試次數過多,請 60 秒後再試",
     "login.errOffline": "無法連接伺服器或登入失敗",
     "login.errCredentials": "帳號或密碼錯誤",
+    "login.sessionExpired": "登入狀態已失效,請重新登入",
     "login.username": "使用者名稱",
 
 
@@ -323,6 +328,7 @@ const I18N = {
     "modal.internalAddressHint": "其他裝置存取服務所用的主機(IP 或網域名稱)。留空則沿用你開啟 Narthex 時所用的位址。",
     "modal.gatewayPortLabel": "opencode 閘道連接埠",
     "modal.gatewayPortHint": "narthex 閘道(opencode「開啟」位址)使用的固定本機連接埠;被占用時自動改用空閒連接埠,修改即時生效。",
+    "modal.gatewayPortRunningHint": "重啟 opencode 卡片後新連接埠才會生效。",
 
     "topbar.account": "帳號",
 
@@ -351,6 +357,7 @@ const I18N = {
     "card.open": "開啟",
     "card.edit": "編輯",
     "card.delete": "刪除",
+    "card.stopToDelete": "請先停止執行個體再刪除",
     "card.user": "使用者",
     "card.password": "密碼",
     "card.token": "權杖",
@@ -377,7 +384,6 @@ const I18N = {
     "modal.cancel": "取消",
 
     "confirm.delete": "刪除卡片「{0}」?",
-    "confirm.stop": "執行個體將被停止。",
 
     "uptime.s": "{0} 秒",
     "uptime.m": "{0} 分鐘",

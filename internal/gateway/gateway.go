@@ -14,12 +14,14 @@ package gateway
 import (
 	"context"
 	"encoding/base64"
+	"html"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 
 	"narthex/internal/auth"
@@ -27,11 +29,13 @@ import (
 	"narthex/internal/store"
 )
 
-// Server is the lifecycle of the gateway listener. It exists only while
-// the opencode card runs: starting it binds the preferred port (falling
-// back to a kernel-assigned ephemeral port when that one is occupied),
-// stopping it closes the listener (and any live connections) so no socket
-// or goroutine lingers.
+// Server is the lifecycle of the gateway listener. Starting it binds the
+// preferred port (falling back to a kernel-assigned ephemeral port when
+// that one is occupied), stopping it closes the listener (and any live
+// connections) so no socket or goroutine lingers. The api layer keeps the
+// listener bound for the whole serve lifetime so a stale opencode tab
+// always gets an HTTP answer (login redirect or stopped page) instead of a
+// connection-refused blank page.
 type Server struct {
 	mu   sync.Mutex
 	srv  *http.Server
@@ -146,16 +150,42 @@ func Handler(cfg *store.Config, lang func() i18n.Lang, target func() (Target, bo
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := auth.Verify(cfg.SessionSecret, cookieValue(r)); !ok {
-			http.Redirect(w, r, loginURL(r, cfg), http.StatusFound)
+			w.Header().Set("Cache-Control", "no-store")
+			http.Redirect(w, r, dashboardURL(r, cfg), http.StatusFound)
 			return
 		}
 		t, ok := target()
 		if !ok || t.Addr == "" {
-			http.Error(w, i18n.T(lang(), "err.gatewayUnavailable"), http.StatusServiceUnavailable)
+			writeStoppedPage(w, lang(), dashboardURL(r, cfg), "gateway.stoppedTitle", "gateway.stoppedBody")
 			return
 		}
 		proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), targetKey{}, t)))
 	})
+}
+
+// writeStoppedPage answers an authenticated visitor when the proxied
+// upstream is gone (stopped, crashed or not started yet) with a small page
+// that bounces back to the narthex dashboard, so a stale tab never lands on
+// a blank connection-refused page. titleKey/bodyKey select the localized
+// copy for the app (opencode or mdBook).
+func writeStoppedPage(w http.ResponseWriter, lang i18n.Lang, dash, titleKey, bodyKey string) {
+	title := i18n.T(lang, titleKey)
+	body := i18n.T(lang, bodyKey)
+	link := i18n.T(lang, "gateway.backToDashboard")
+	page := "<!doctype html><html lang=\"" + html.EscapeString(string(lang)) + "\">" +
+		"<head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">" +
+		"<meta http-equiv=\"refresh\" content=\"3;url=" + html.EscapeString(dash) + "\">" +
+		"<title>" + html.EscapeString(title) + "</title></head>" +
+		"<body style=\"margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;" +
+		"background:#0b0d12;color:#e7e9ee;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif\">" +
+		"<main style=\"text-align:center;padding:24px\"><h1 style=\"font-size:18px;font-weight:600\">" +
+		html.EscapeString(title) + "</h1><p style=\"color:#9aa0ac\">" + html.EscapeString(body) + "</p>" +
+		"<p><a style=\"color:#7aa2ff\" href=\"" + html.EscapeString(dash) + "\">" +
+		html.EscapeString(link) + "</a></p></main></body></html>"
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	io.WriteString(w, page)
 }
 
 func basicAuthHeader(user, pass string) string {
@@ -170,9 +200,19 @@ func cookieValue(r *http.Request) string {
 	return c.Value
 }
 
-// loginURL points the browser back at the narthex login page (same host,
-// narthex's own port).
-func loginURL(r *http.Request, cfg *store.Config) string {
+// dashboardURL points the browser back at the narthex dashboard (and its
+// login page). It honors the configured internal address, else the request
+// host, following the same rules as the card "Open" URLs.
+func dashboardURL(r *http.Request, cfg *store.Config) string {
+	if addr := strings.TrimSpace(cfg.InternalAddress); addr != "" {
+		addr = strings.TrimPrefix(addr, "http://")
+		addr = strings.TrimPrefix(addr, "https://")
+		addr = strings.TrimSuffix(addr, "/")
+		if _, _, err := net.SplitHostPort(addr); err == nil {
+			return "http://" + addr + "/"
+		}
+		return "http://" + net.JoinHostPort(addr, strconv.Itoa(cfg.Port)) + "/"
+	}
 	host := r.Host
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h

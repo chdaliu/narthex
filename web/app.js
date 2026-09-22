@@ -58,8 +58,8 @@ async function api(path, opts = {}) {
     headers: { "Content-Type": "application/json" },
     ...opts,
   });
-  if (res.status === 401 && !path.endsWith("/login") && !path.endsWith("/session")) {
-    showLogin();
+  if ((res.status === 401 || res.status === 403) && !path.endsWith("/login") && !path.endsWith("/session")) {
+    showLogin(true);
     throw new Error("unauthorized");
   }
   const data = await res.json().catch(() => ({}));
@@ -75,8 +75,8 @@ async function uploadImage(file) {
   const fd = new FormData();
   fd.append("file", file);
   const res = await fetch("/api/uploads", { method: "POST", body: fd });
-  if (res.status === 401) {
-    showLogin();
+  if (res.status === 401 || res.status === 403) {
+    showLogin(true);
     throw new Error("unauthorized");
   }
   const data = await res.json().catch(() => ({}));
@@ -95,16 +95,26 @@ async function refreshMeta() {
 
 /* ---------- view switching ---------- */
 
-function showLogin() {
+// showLogin returns to the login view. expired=true shows a "session
+// expired" notice (used when a live session is invalidated, not on a fresh
+// visit or a manual logout). It resets every other view so the page is
+// never left blank.
+function showLogin(expired = false) {
   polling = false;
   const wasHidden = loginView.hidden;
   appView.hidden = true;
   accountView.hidden = true;
-  loginView.hidden = false;
   modalRoot.hidden = true;
+  loginView.hidden = false;
   if (wasHidden) {
     usernameInput.value = rememberedUsername();
     passwordInput.value = "";
+  }
+  if (expired) {
+    loginError.hidden = false;
+    loginError.textContent = t("login.sessionExpired");
+  } else {
+    loginError.hidden = true;
   }
 }
 
@@ -246,10 +256,11 @@ function credentialRows(card) {
 function cardEl(card) {
   const el = document.createElement("article");
   el.className = "card";
+  el.dataset.id = card.id;
   el.innerHTML = `
     <div class="card-cover">
-      <img class="cover-img" src="${bgUrl(card.background)}" alt="">
-      <img class="card-icon" src="/assets/icons/${card.icon}.svg" alt="">
+      <img class="cover-img" src="${bgUrl(card.background)}" alt="" draggable="false">
+      <img class="card-icon" src="/assets/icons/${card.icon}.svg" alt="" draggable="false">
     </div>
     <div class="card-body">
       <div class="card-name" title="${esc(card.name)}">${esc(card.name)}</div>
@@ -357,12 +368,24 @@ function render(cards) {
       cardEls.delete(id);
     }
   }
+  // Keep the DOM order in sync with the server order. Only touch the DOM
+  // when it actually differs so the rise animation is not replayed on
+  // every poll.
+  const want = cards.map((c) => c.id).filter((id) => cardEls.has(id));
+  const have = Array.from(grid.children)
+    .filter((el) => el.classList.contains("card") && el.dataset.id)
+    .map((el) => el.dataset.id);
+  if (!activeDrag && !orderPending && want.length === have.length && want.some((id, i) => id !== have[i])) {
+    for (const id of want) grid.appendChild(cardEls.get(id).root);
+  }
   empty.hidden = cards.length > 0;
 }
 
 async function loadCards() {
+  const seq = ++cardsReqSeq;
   try {
     const data = await api("/api/cards");
+    if (seq !== cardsReqSeq) return; // superseded by a newer request
     lastCards = data.cards || [];
     render(lastCards);
   } catch (e) { /* unauthorized handled by api() */ }
@@ -374,6 +397,10 @@ let polling = false;
 
 async function poll() {
   if (!polling) return;
+  if (activeDrag || orderPending) {
+    setTimeout(poll, 1000);
+    return;
+  }
   await loadCards();
   const busy = lastCards.some((c) => c.running && !c.healthy);
   setTimeout(poll, busy ? 2000 : 5000);
@@ -399,9 +426,7 @@ async function toggleCard(id, running) {
 }
 
 async function removeCard(card) {
-  let msg = fmtTpl(t("confirm.delete"), card.name);
-  if (card.running) msg += "\n" + t("confirm.stop");
-  if (!confirm(msg)) return;
+  if (!confirm(fmtTpl(t("confirm.delete"), card.name))) return;
   try {
     await api(`/api/cards/${card.id}`, { method: "DELETE" });
   } catch (e) {
@@ -409,6 +434,192 @@ async function removeCard(card) {
   }
   await loadCards();
 }
+
+/* ---------- card drag sorting ---------- */
+
+// Cards can be reordered by dragging. A single pointer-events state machine
+// covers mouse, pen and touch: on mouse/pen the drag starts once the pointer
+// moves past a small threshold; on touch it starts after a short long-press
+// so the page still scrolls normally. While dragging, a fixed-position ghost
+// follows the pointer and the real card is moved through the DOM as a
+// placeholder; on release the DOM order is persisted.
+
+const DRAG_LONG_PRESS_MS = 300;
+const DRAG_MOVE_THRESHOLD = 6;
+const DRAG_TOUCH_CANCEL_DIST = 12;
+
+let pendingDrag = null;
+let activeDrag = null;
+let orderPending = false;
+let cardsReqSeq = 0;
+let suppressCardClick = false;
+
+function cardOrder() {
+  return Array.from(grid.children)
+    .filter((el) => el.classList.contains("card") && el.dataset.id)
+    .map((el) => el.dataset.id);
+}
+
+function gridColumns() {
+  const cols = getComputedStyle(grid).gridTemplateColumns;
+  if (!cols || cols === "none") return 1;
+  return cols.split(" ").filter(Boolean).length || 1;
+}
+
+async function persistCardOrder(ids) {
+  if (!ids.length) return;
+  // Block polling and order-sync until the server confirms the new order,
+  // otherwise a GET issued before the POST commits would revert the grid.
+  orderPending = true;
+  cardsReqSeq++; // drop any in-flight list request carrying the old order
+  try {
+    await api("/api/cards/reorder", { method: "POST", body: JSON.stringify({ ids }) });
+    // Reorder the cached list too, so the next render keeps the new order
+    // even before the following poll refreshes card status.
+    const byId = new Map(lastCards.map((c) => [c.id, c]));
+    const reordered = ids.map((id) => byId.get(id)).filter(Boolean);
+    for (const c of lastCards) if (!reordered.includes(c)) reordered.push(c);
+    lastCards = reordered;
+  } catch (e) {
+    orderPending = false;
+    alertErr(e);
+    await loadCards(); // fall back to the server's order
+    return;
+  }
+  orderPending = false;
+}
+
+function beginDrag(e) {
+  const p = pendingDrag;
+  if (!p) return;
+  pendingDrag = null;
+  if (p.timer) clearTimeout(p.timer);
+
+  const el = p.el;
+  const rect = el.getBoundingClientRect();
+  const ghost = el.cloneNode(true);
+  ghost.removeAttribute("data-id");
+  ghost.classList.add("card-drag-ghost");
+  ghost.style.width = `${rect.width}px`;
+  ghost.style.height = `${rect.height}px`;
+  ghost.style.left = `${rect.left}px`;
+  ghost.style.top = `${rect.top}px`;
+  document.body.appendChild(ghost);
+
+  el.classList.add("card-dragging");
+  document.body.classList.add("card-drag-active");
+
+  activeDrag = {
+    el,
+    ghost,
+    pointerId: p.pointerId,
+    offsetX: e.clientX - rect.left,
+    offsetY: e.clientY - rect.top,
+    multiColumn: gridColumns() > 1,
+  };
+  suppressCardClick = true;
+  try { el.setPointerCapture(p.pointerId); } catch (err) { /* not supported */ }
+  moveDrag(e);
+}
+
+function moveDrag(e) {
+  const d = activeDrag;
+  if (!d || e.pointerId !== d.pointerId) return;
+  if (e.cancelable) e.preventDefault();
+  d.ghost.style.left = `${e.clientX - d.offsetX}px`;
+  d.ghost.style.top = `${e.clientY - d.offsetY}px`;
+
+  const under = document.elementFromPoint(e.clientX, e.clientY);
+  const target = under && under.closest ? under.closest(".card") : null;
+  if (!target || target === d.el || !grid.contains(target)) return;
+  const rect = target.getBoundingClientRect();
+  // In a multi-column grid the horizontal position within the target card
+  // decides the slot; in a single-column (phone) layout it is vertical.
+  const before = d.multiColumn
+    ? e.clientX < rect.left + rect.width / 2
+    : e.clientY < rect.top + rect.height / 2;
+  if (before) target.before(d.el);
+  else target.after(d.el);
+}
+
+function cancelPendingDrag() {
+  if (pendingDrag && pendingDrag.timer) clearTimeout(pendingDrag.timer);
+  pendingDrag = null;
+}
+
+function finishDrag() {
+  const d = activeDrag;
+  if (!d) return;
+  activeDrag = null;
+  d.el.classList.remove("card-dragging");
+  document.body.classList.remove("card-drag-active");
+  d.ghost.remove();
+  try { d.el.releasePointerCapture(d.pointerId); } catch (err) { /* not supported */ }
+  persistCardOrder(cardOrder());
+  setTimeout(() => { suppressCardClick = false; }, 400);
+}
+
+grid.addEventListener("pointerdown", (e) => {
+  if (activeDrag || pendingDrag) return;
+  if (e.pointerType === "mouse" && e.button !== 0) return;
+  if (e.target.closest("button, a")) return;
+  const el = e.target.closest(".card");
+  if (!el || !grid.contains(el) || !el.dataset.id) return;
+
+  pendingDrag = {
+    el,
+    pointerId: e.pointerId,
+    startX: e.clientX,
+    startY: e.clientY,
+    touch: e.pointerType === "touch",
+    timer: null,
+  };
+  if (pendingDrag.touch) {
+    pendingDrag.timer = setTimeout(() => beginDrag(e), DRAG_LONG_PRESS_MS);
+  }
+});
+
+document.addEventListener("pointermove", (e) => {
+  if (activeDrag) { moveDrag(e); return; }
+  if (!pendingDrag || e.pointerId !== pendingDrag.pointerId) return;
+  const dx = e.clientX - pendingDrag.startX;
+  const dy = e.clientY - pendingDrag.startY;
+  const dist = Math.hypot(dx, dy);
+  if (pendingDrag.touch) {
+    if (dist > DRAG_TOUCH_CANCEL_DIST) cancelPendingDrag();
+  } else if (dist > DRAG_MOVE_THRESHOLD) {
+    beginDrag(e);
+  }
+}, { passive: false });
+
+document.addEventListener("pointerup", (e) => {
+  if (activeDrag && e.pointerId === activeDrag.pointerId) finishDrag();
+  else if (pendingDrag && e.pointerId === pendingDrag.pointerId) cancelPendingDrag();
+});
+
+document.addEventListener("pointercancel", (e) => {
+  if (activeDrag && e.pointerId === activeDrag.pointerId) finishDrag();
+  else if (pendingDrag && e.pointerId === pendingDrag.pointerId) cancelPendingDrag();
+});
+
+// Touch Events still fire alongside Pointer Events; preventing the default on
+// touchmove is what actually stops the page from scrolling once a touch drag
+// is underway (changing touch-action mid-gesture has no effect).
+grid.addEventListener("touchmove", (e) => {
+  if (activeDrag && e.cancelable) e.preventDefault();
+}, { passive: false });
+
+grid.addEventListener("contextmenu", (e) => {
+  if (activeDrag) e.preventDefault();
+});
+
+// A drag ends with a click event; swallow it so the card modal does not open.
+document.addEventListener("click", (e) => {
+  if (!suppressCardClick) return;
+  suppressCardClick = false;
+  e.stopPropagation();
+  e.preventDefault();
+}, true);
 
 /* ---------- modal ---------- */
 
@@ -479,6 +690,7 @@ function openCardModal(card) {
     <div class="detail-list">${detailRows(card)}</div>
     ${creds ? `<div class="detail-creds"><div class="field-label">${t("card.credsLabel")}</div>${creds}</div>` : ""}
     <div class="modal-actions">
+      ${card.running ? `<span class="muted" style="margin-right:auto;font-size:12px;align-self:center">${t("card.stopToDelete")}</span>` : ""}
       <button type="button" class="btn ghost" id="btn-detail-delete">${t("card.delete")}</button>
       <button type="button" class="btn primary" id="btn-detail-edit">${t("card.edit")}</button>
     </div>`);
@@ -487,7 +699,12 @@ function openCardModal(card) {
     row.addEventListener("click", () => copyText(row.dataset.copy, row));
   });
   $("#btn-detail-edit", modal).addEventListener("click", () => openEditModal(card));
-  $("#btn-detail-delete", modal).addEventListener("click", () => {
+  const delBtn = $("#btn-detail-delete", modal);
+  if (card.running) {
+    delBtn.disabled = true;
+    delBtn.title = t("card.stopToDelete");
+  }
+  delBtn.addEventListener("click", () => {
     closeModal();
     removeCard(card);
   });
@@ -569,7 +786,7 @@ function bgPickerGrid(container, selected) {
 // kindIcon returns the default icon asset for a kind.
 function kindIcon(kind) {
   switch (kind) {
-    case "opencode": return "terminal";
+    case "opencode": return "braces";
     case "mdbook": return "book-open";
     case "vscode": return "code";
     case "vscodium": return "code";
@@ -843,6 +1060,12 @@ async function openEditModal(card) {
       <div class="field-label">${t("modal.bgLabel")}</div>
       <div id="edit-bg-grid"></div>
     </div>
+    ${card.kind === "opencode" ? `
+    <div>
+      <div class="field-label">${t("modal.gatewayPortLabel")}</div>
+      <input type="number" id="edit-gateway-port" min="1" max="65535" placeholder="4399" style="margin-top:6px">
+      <div class="muted" id="edit-gateway-port-hint" style="font-size:12px;margin-top:4px">${t("modal.gatewayPortHint")}</div>
+    </div>` : ""}
     <div class="modal-actions">
       <button type="button" class="btn ghost" id="btn-cancel">${t("modal.cancel")}</button>
       <button type="button" class="btn primary" id="btn-save">${t("modal.save")}</button>
@@ -851,12 +1074,31 @@ async function openEditModal(card) {
   const iconPicker = iconPickerGrid(card.icon);
   $("#edit-icon-grid", modal).appendChild(iconPicker.el);
   const bgPicker = bgPickerGrid($("#edit-bg-grid", modal), card.background);
+  const gwPortInput = card.kind === "opencode" ? $("#edit-gateway-port", modal) : null;
+  if (gwPortInput) {
+    gwPortInput.value = meta.gatewayPort || "";
+    if (card.running) {
+      $("#edit-gateway-port-hint", modal).textContent = t("modal.gatewayPortRunningHint");
+    }
+  }
 
   $("#btn-cancel", modal).addEventListener("click", closeModal);
   $("#btn-save", modal).addEventListener("click", async () => {
     const btn = $("#btn-save", modal);
+    const gwValue = gwPortInput ? parseInt(gwPortInput.value, 10) : 0;
+    if (gwPortInput && (!Number.isInteger(gwValue) || gwValue < 1 || gwValue > 65535)) {
+      alert(t("err.invalidGatewayPort"));
+      return;
+    }
     btn.disabled = true;
     try {
+      if (gwPortInput && gwValue !== meta.gatewayPort) {
+        const res = await api("/api/settings", {
+          method: "POST",
+          body: JSON.stringify({ gatewayPort: gwValue }),
+        });
+        meta.gatewayPort = res.gatewayPort;
+      }
       await api(`/api/cards/${card.id}`, {
         method: "PATCH",
         body: JSON.stringify({
@@ -1005,11 +1247,6 @@ function buildSettingsModal() {
       <div class="muted" style="font-size:12px;margin-top:4px">${t("modal.internalAddressHint")}</div>
     </div>
     <div>
-      <div class="field-label">${t("modal.gatewayPortLabel")}</div>
-      <input type="number" id="set-gateway-port" min="1" max="65535" placeholder="4399" style="margin-top:6px">
-      <div class="muted" style="font-size:12px;margin-top:4px">${t("modal.gatewayPortHint")}</div>
-    </div>
-    <div>
       <div class="field-label">${t("modal.autostartLabel")}</div>
       <label class="slogan-toggle">
         <input type="checkbox" id="set-autostart-on"> ${t("modal.autostartLabel")}
@@ -1112,28 +1349,6 @@ function buildSettingsModal() {
         alertErr(e);
       }
     }, 400);
-  });
-
-  const gwPortInput = $("#set-gateway-port", modal);
-  gwPortInput.value = meta.gatewayPort || "";
-  gwPortInput.addEventListener("change", async () => {
-    const value = parseInt(gwPortInput.value, 10);
-    if (!Number.isInteger(value) || value < 1 || value > 65535) {
-      alert(t("err.invalidGatewayPort"));
-      gwPortInput.value = meta.gatewayPort || "";
-      return;
-    }
-    try {
-      const res = await api("/api/settings", {
-        method: "POST",
-        body: JSON.stringify({ gatewayPort: value }),
-      });
-      meta.gatewayPort = res.gatewayPort;
-      gwPortInput.value = res.gatewayPort;
-    } catch (e) {
-      gwPortInput.value = meta.gatewayPort || "";
-      alertErr(e);
-    }
   });
 
   const autoOn = $("#set-autostart-on", modal);
@@ -1373,6 +1588,26 @@ async function enterApp() {
   }
 }
 
+// revalidateSession re-checks the session without touching the current
+// view unless something changed: an invalidated session drops to the login
+// page (with a notice), a valid session restores the app after a bfcache
+// restore or a server restart. It is a no-op when already on the login
+// page.
+async function revalidateSession() {
+  try {
+    const data = await api("/api/session");
+    if (data.authed) {
+      if (!loginView.hidden) {
+        applyI18n(data.lang || "en");
+        applySessionBg(data);
+        await enterApp();
+      }
+    } else if (loginView.hidden) {
+      showLogin(true);
+    }
+  } catch (e) { /* server unreachable; keep the current view */ }
+}
+
 async function init() {
   const cached = cachedPageBg();
   if (cached && cached.url) applyPageBgUrl(cached.url);
@@ -1385,7 +1620,18 @@ async function init() {
   } catch (e) {
     applyI18n("en");
     showLogin();
+  } finally {
+    // Never leave the page with every view hidden (blank).
+    if (loginView.hidden && appView.hidden && accountView.hidden) showLogin();
   }
 }
+
+window.addEventListener("pageshow", (e) => {
+  if (e.persisted) revalidateSession();
+});
+window.addEventListener("focus", revalidateSession);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) revalidateSession();
+});
 
 init();

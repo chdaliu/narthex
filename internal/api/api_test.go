@@ -201,6 +201,7 @@ func newTestEnvFull(t *testing.T, mutateCfg func(*store.Config), mutateSvc func(
 	}
 	ts := httptest.NewServer(server.New(cfg, svc).Handler())
 	t.Cleanup(ts.Close)
+	t.Cleanup(svc.Shutdown)
 	return &testEnv{base: ts.URL, backend: backend, root: root}
 }
 
@@ -317,6 +318,9 @@ func TestAuthFlow(t *testing.T) {
 	if res.StatusCode != http.StatusOK || m["authed"] != true {
 		t.Fatalf("session should be authed: %d %v", res.StatusCode, m)
 	}
+	if cc := res.Header.Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("session Cache-Control = %q, want no-store", cc)
+	}
 	res, _ = doReq(t, "POST", env.base+"/api/logout", cookie, nil)
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("logout = %d", res.StatusCode)
@@ -402,6 +406,60 @@ func TestCardsCRUD(t *testing.T) {
 	res, _ = doReq(t, "DELETE", env.base+"/api/cards/"+id, cookie, nil)
 	if res.StatusCode != http.StatusNotFound {
 		t.Fatalf("delete unknown = %d, want 404", res.StatusCode)
+	}
+}
+
+func TestReorderCards(t *testing.T) {
+	env := newTestEnvFull(t, nil, func(s *api.Service) {
+		comfyInstalled(s, "/path/to/comfy/ComfyUI")
+		opencodeInstalled(s)
+		vscodeInstalled(s)
+	})
+	cookie := loginCookie(t, env.base, testPassword)
+
+	ids := make([]string, 0, 3)
+	for _, kind := range []string{"comfyui", "opencode", "vscode"} {
+		res, m := doReq(t, "POST", env.base+"/api/cards", cookie, map[string]string{"kind": kind})
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("create %s = %d %v", kind, res.StatusCode, m)
+		}
+		ids = append(ids, cardID(t, m))
+	}
+
+	// Reverse the order; unknown IDs are ignored.
+	reversed := []string{ids[2], "missing", ids[0], ids[1]}
+	res, m := doReq(t, "POST", env.base+"/api/cards/reorder", cookie, map[string]any{"ids": reversed})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("reorder = %d %v", res.StatusCode, m)
+	}
+
+	res, m = doReq(t, "GET", env.base+"/api/cards", cookie, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("list = %d", res.StatusCode)
+	}
+	list := cardsList(t, m)
+	if len(list) != 3 {
+		t.Fatalf("expected 3 cards, got %d", len(list))
+	}
+	want := []string{ids[2], ids[0], ids[1]}
+	for i, c := range list {
+		if c["id"] != want[i] {
+			t.Fatalf("card %d = %v, want %s", i, c["id"], want[i])
+		}
+	}
+
+	// A partial list keeps the unmentioned card at the end.
+	res, _ = doReq(t, "POST", env.base+"/api/cards/reorder", cookie, map[string]any{"ids": []string{ids[0]}})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("partial reorder = %d", res.StatusCode)
+	}
+	_, m = doReq(t, "GET", env.base+"/api/cards", cookie, nil)
+	list = cardsList(t, m)
+	if list[0]["id"] != ids[0] {
+		t.Fatalf("partial reorder should move %s to front: %v", ids[0], list)
+	}
+	if len(list) != 3 {
+		t.Fatalf("partial reorder dropped cards: %v", list)
 	}
 }
 
@@ -1248,8 +1306,10 @@ func TestOpencodeURL(t *testing.T) {
 }
 
 // TestOpencodeGatewayLifecycle checks that the reverse-proxy listener is
-// started with the opencode card and torn down when it stops or is
-// deleted, leaving no lingering socket.
+// bound for the whole serve lifetime: it comes up with the first reconcile
+// (card create), stays bound while the card stops or is deleted (so a
+// stale tab gets a login redirect or a stopped page instead of connection
+// refused), and reuses the preferred port so the "Open" URL stays stable.
 func TestOpencodeGatewayLifecycle(t *testing.T) {
 	gwWant := freePort(t)
 	var svcRef *api.Service
@@ -1268,22 +1328,18 @@ func TestOpencodeGatewayLifecycle(t *testing.T) {
 		t.Fatalf("create opencode = %d %v", res.StatusCode, m)
 	}
 	id := cardID(t, m)
-	if svcRef.GatewayPort != 0 {
-		t.Fatalf("gateway running before start: %d", svcRef.GatewayPort)
+	if svcRef.GatewayPort != gwWant {
+		t.Fatalf("gateway port after create = %d, want preferred %d", svcRef.GatewayPort, gwWant)
 	}
 
 	res, m = doReq(t, "POST", env.base+"/api/cards/"+id+"/start", cookie, nil)
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("start opencode = %d %v", res.StatusCode, m)
 	}
-	gwPort := svcRef.GatewayPort
-	if gwPort == 0 {
-		t.Fatalf("gateway not started with the card")
+	if svcRef.GatewayPort != gwWant {
+		t.Fatalf("gateway port = %d, want preferred %d", svcRef.GatewayPort, gwWant)
 	}
-	if gwPort != gwWant {
-		t.Fatalf("gateway port = %d, want preferred %d", gwPort, gwWant)
-	}
-	if want := fmt.Sprintf("http://127.0.0.1:%d/", gwPort); m["url"] != want {
+	if want := fmt.Sprintf("http://127.0.0.1:%d/", gwWant); m["url"] != want {
 		t.Fatalf("card url = %v, want %v", m["url"], want)
 	}
 
@@ -1291,22 +1347,73 @@ func TestOpencodeGatewayLifecycle(t *testing.T) {
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("stop opencode = %d", res.StatusCode)
 	}
-	if svcRef.GatewayPort != 0 {
-		t.Fatalf("gateway still running after stop: %d", svcRef.GatewayPort)
+	if svcRef.GatewayPort != gwWant {
+		t.Fatalf("gateway port after stop = %d, want %d (must stay bound)", svcRef.GatewayPort, gwWant)
 	}
 
-	// Start then delete must also stop the gateway, and a restart must reuse
-	// the preferred port so the "Open" URL stays stable.
-	res, _ = doReq(t, "POST", env.base+"/api/cards/"+id+"/start", cookie, nil)
-	if res.StatusCode != http.StatusOK || svcRef.GatewayPort != gwWant {
-		t.Fatalf("restart opencode = %d, gateway = %d, want %d", res.StatusCode, svcRef.GatewayPort, gwWant)
-	}
 	res, _ = doReq(t, "DELETE", env.base+"/api/cards/"+id, cookie, nil)
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("delete opencode = %d", res.StatusCode)
 	}
-	if svcRef.GatewayPort != 0 {
-		t.Fatalf("gateway still running after delete: %d", svcRef.GatewayPort)
+	if svcRef.GatewayPort != gwWant {
+		t.Fatalf("gateway port after delete = %d, want %d (must stay bound)", svcRef.GatewayPort, gwWant)
+	}
+}
+
+// TestRunningCardGuards checks that a running instance cannot be deleted
+// (it must be stopped first) and that a gateway port change while opencode
+// runs is saved but deferred: the new port is applied once the card is
+// restarted.
+func TestRunningCardGuards(t *testing.T) {
+	gwWant := freePort(t)
+	var svcRef *api.Service
+	env := newTestEnvFull(t, func(cfg *store.Config) {
+		cfg.Opencode.Password = "oc-secret"
+		cfg.Opencode.GatewayPort = gwWant
+	}, func(s *api.Service) {
+		opencodeInstalled(s)
+		svcRef = s
+		s.GatewayHandler = func() http.Handler { return http.NotFoundHandler() }
+	})
+	cookie := loginCookie(t, env.base, testPassword)
+
+	res, m := doReq(t, "POST", env.base+"/api/cards", cookie, map[string]string{"kind": "opencode"})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("create opencode = %d %v", res.StatusCode, m)
+	}
+	id := cardID(t, m)
+	res, m = doReq(t, "POST", env.base+"/api/cards/"+id+"/start", cookie, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("start opencode = %d %v", res.StatusCode, m)
+	}
+
+	// A port change while running is saved but not applied yet.
+	newPort := freePort(t)
+	res, m = doReq(t, "POST", env.base+"/api/settings", cookie, map[string]any{"gatewayPort": newPort})
+	if res.StatusCode != http.StatusOK || m["gatewayPort"] != float64(newPort) {
+		t.Fatalf("gatewayPort while running = %d %v", res.StatusCode, m)
+	}
+	if svcRef.GatewayPort != gwWant {
+		t.Fatalf("gateway port while running = %d, want %d (must not rebind)", svcRef.GatewayPort, gwWant)
+	}
+
+	// Deleting a running card is rejected.
+	res, _ = doReq(t, "DELETE", env.base+"/api/cards/"+id, cookie, nil)
+	if res.StatusCode != http.StatusConflict {
+		t.Fatalf("delete running = %d, want 409", res.StatusCode)
+	}
+
+	// Stopping the card applies the pending port change.
+	res, _ = doReq(t, "POST", env.base+"/api/cards/"+id+"/stop", cookie, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("stop opencode = %d", res.StatusCode)
+	}
+	if svcRef.GatewayPort != newPort {
+		t.Fatalf("gateway port after stop = %d, want %d", svcRef.GatewayPort, newPort)
+	}
+	res, _ = doReq(t, "DELETE", env.base+"/api/cards/"+id, cookie, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("delete after stop = %d", res.StatusCode)
 	}
 }
 
@@ -1503,6 +1610,11 @@ func TestMdbookCardFlow(t *testing.T) {
 	calls := env.backend.startCalls()
 	if len(calls) != 1 || calls[0] != "mdbook|"+bookDir+"|"+id {
 		t.Fatalf("start calls = %v", calls)
+	}
+	// mdBook is proxied same-origin on the dashboard listener, so the
+	// "Open" URL is a root-relative path (host/scheme independent).
+	if m["url"] != "/mdbook/" {
+		t.Fatalf("mdbook url = %v, want /mdbook/", m["url"])
 	}
 
 	res, _ = doReq(t, "POST", env.base+"/api/cards/"+id+"/stop", cookie, nil)
