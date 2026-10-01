@@ -19,6 +19,8 @@
 
 html, body { height: 100%; }
 
+html { scrollbar-gutter: stable; background: #0a0c12; }
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
     "Hiragino Sans GB", "Segoe UI", "Noto Sans SC", sans-serif;
@@ -26,6 +28,8 @@ body {
   min-height: 100vh;
   overflow-x: hidden;
 }
+
+body.modal-open { overflow: hidden; }
 
 .bg {
   position: fixed;
@@ -366,6 +370,7 @@ body.card-drag-active .card { animation: none; }
   width: min(600px, 100%);
   max-height: 86vh;
   overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--glass-bg-strong);
   border: 1px solid var(--glass-border);
   backdrop-filter: blur(var(--blur)) saturate(150%);

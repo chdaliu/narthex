@@ -104,7 +104,7 @@ function showLogin(expired = false) {
   const wasHidden = loginView.hidden;
   appView.hidden = true;
   accountView.hidden = true;
-  modalRoot.hidden = true;
+  closeModal();
   loginView.hidden = false;
   if (wasHidden) {
     usernameInput.value = rememberedUsername();
@@ -630,6 +630,7 @@ function openModal(content) {
   modal.innerHTML = content;
   modalRoot.appendChild(modal);
   modalRoot.hidden = false;
+  document.body.classList.add("modal-open");
 
   const close = $(".modal-close", modal);
   if (close) close.addEventListener("click", closeModal);
@@ -646,6 +647,7 @@ function openModal(content) {
 function closeModal() {
   modalRoot.hidden = true;
   modalRoot.innerHTML = "";
+  document.body.classList.remove("modal-open");
 }
 
 /* ---------- card detail modal ---------- */
@@ -1500,7 +1502,7 @@ function showAccount() {
   closeMenu();
   appView.hidden = true;
   loginView.hidden = true;
-  modalRoot.hidden = true;
+  closeModal();
   accountView.hidden = false;
   acctUsername.value = meta.username || "";
   acctCurPw.value = "";
