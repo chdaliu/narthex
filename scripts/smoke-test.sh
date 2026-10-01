@@ -156,6 +156,12 @@ EOF
 printf '# Summary\n\n- [Chapter 1](./chapter_1.md)\n' > "$MDBOOK_BOOKS/guide/src/SUMMARY.md"
 printf '# Chapter 1\n' > "$MDBOOK_BOOKS/guide/src/chapter_1.md"
 
+# A configured game directory with one recognized ROM for the EmulatorJS
+# card (a real tiny file; the player serves it, no emulation happens here).
+EMU_ROMS="$TMP/roms"
+mkdir -p "$EMU_ROMS"
+printf 'NESROM' > "$EMU_ROMS/mario.nes"
+
 fail() { echo "FAIL: $1" >&2; exit 1; }
 
 echo "== build =="
@@ -178,6 +184,14 @@ cfg, books, machine = sys.argv[1], sys.argv[2], sys.argv[3]
 c = json.load(open(cfg))
 c.setdefault("mdbook", {})["dirs"] = [books]
 c.setdefault("vscodium", {})["machineSettingsFile"] = machine
+json.dump(c, open(cfg, "w"), indent=2)
+PY
+# Configure the EmulatorJS game directory so the emulatorjs card kind shows.
+python3 - "$CFG" "$EMU_ROMS" <<'PY'
+import json, sys
+cfg, roms = sys.argv[1], sys.argv[2]
+c = json.load(open(cfg))
+c.setdefault("emulatorjs", {})["dirs"] = [roms]
 json.dump(c, open(cfg, "w"), indent=2)
 PY
 # A pre-existing server-side Machine setting that the seed must preserve.
@@ -243,7 +257,9 @@ assert apps['vscode']['label'] == 'VS Code', apps
 assert apps['vscodium']['installed'] is True, apps
 assert apps['vscodium']['label'] == 'VSCodium', apps
 assert apps['wetty']['installed'] is True, apps
-assert apps['wetty']['label'] == 'WeTTY', apps"
+assert apps['wetty']['label'] == 'WeTTY', apps
+assert apps['emulatorjs']['installed'] is True, apps
+assert apps['emulatorjs']['label'] == 'EmulatorJS', apps"
 
 echo "== language switch =="
 curl -fsS -b "$COOKIE" "http://127.0.0.1:$PORT/api/meta" | python3 -c 'import sys,json;assert json.load(sys.stdin)["lang"]=="en","default lang should be en"'
@@ -520,6 +536,57 @@ m = re.search(r':(\d+)/', c['url'])
 assert m and 4900 <= int(m.group(1)) <= 5099, c" "$ID"
 curl -fsS -b "$COOKIE" -X POST "http://127.0.0.1:$PORT/api/cards/$ID/stop" >/dev/null || fail "wetty stop failed"
 curl -fsS -b "$COOKIE" -X DELETE "http://127.0.0.1:$PORT/api/cards/$ID" >/dev/null || fail "wetty delete failed"
+
+echo "== emulatorjs games API =="
+curl -fsS -b "$COOKIE" "http://127.0.0.1:$PORT/api/emulator/games" | python3 -c "
+import sys, json
+r = json.load(sys.stdin)
+assert r['dirs'] == ['$EMU_ROMS'], r
+g = [x for x in r['games'] if x['path'] == '$EMU_ROMS/mario.nes']
+assert g and g[0]['core'] == 'fceumm', r"
+
+echo "== emulatorjs card + proxy toggle =="
+CARD=$(curl -fsS -b "$COOKIE" -H 'Content-Type: application/json' \
+  -d "{\"kind\":\"emulatorjs\",\"dir\":\"$EMU_ROMS/mario.nes\"}" \
+  "http://127.0.0.1:$PORT/api/cards")
+ID=$(python3 -c "import sys,json;print(json.loads(sys.argv[1])['id'])" "$CARD")
+[ -n "$ID" ] || fail "no emulatorjs card id in response"
+echo "$CARD" | python3 -c "import sys,json;c=json.load(sys.stdin);assert c['kind']=='emulatorjs' and c['icon']=='gamepad-2' and c['name']=='EmulatorJS' and c['dir']=='$EMU_ROMS/mario.nes',c"
+# A card without a recognized ROM is rejected.
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" -H 'Content-Type: application/json' \
+  -d '{"kind":"emulatorjs","dir":"/nope/x.nes"}' "http://127.0.0.1:$PORT/api/cards")
+[ "$code" = "400" ] || fail "emulatorjs card without a game should be 400, got $code"
+curl -fsS -b "$COOKIE" -X POST "http://127.0.0.1:$PORT/api/cards/$ID/start" >/dev/null || fail "emulatorjs start failed"
+RUN="no"
+for _ in $(seq 1 40); do
+  STATUS=$(curl -fsS -b "$COOKIE" "http://127.0.0.1:$PORT/api/cards")
+  RUN=$(echo "$STATUS" | python3 -c "import sys,json;c=[x for x in json.load(sys.stdin)['cards'] if x['id']=='$ID'][0];print('yes' if c['running'] and c['healthy'] else 'no')")
+  [ "$RUN" = "yes" ] && break
+  sleep 0.5
+done
+[ "$RUN" = "yes" ] || { echo "$STATUS"; fail "emulatorjs did not become running"; }
+# Proxy on (default): the card "Open" URL is the same-origin path, which is
+# session-gated and serves the generated EmulatorJS player page.
+echo "$STATUS" | python3 -c "import sys,json;c=[x for x in json.load(sys.stdin)['cards'] if x['id']=='$ID'][0];assert c['url']=='/emulator/',c"
+code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/emulator/")
+[ "$code" = "302" ] || fail "unauthenticated emulatorjs proxy should redirect, got $code"
+curl -fsS -b "$COOKIE" "http://127.0.0.1:$PORT/emulator/" | grep -q "EJS_core" || fail "emulatorjs player page missing EJS_core"
+curl -fsS -b "$COOKIE" "http://127.0.0.1:$PORT/emulator/rom" | grep -q "NESROM" || fail "emulatorjs ROM not served"
+# Turning the proxy off switches the "Open" URL to the direct child port.
+PATCHED=$(curl -fsS -b "$COOKIE" -X PATCH -H 'Content-Type: application/json' \
+  -d '{"proxy":false}' "http://127.0.0.1:$PORT/api/cards/$ID")
+DIRECT=$(echo "$PATCHED" | python3 -c "import sys,json;print(json.load(sys.stdin)['url'])")
+echo "$PATCHED" | python3 -c "import sys,json;c=json.load(sys.stdin);assert c['disableProxy'] is True,c"
+echo "$DIRECT" | python3 -c "import sys,re;assert re.match(r'^http://127\.0\.0\.1:\d+/$', sys.stdin.read().strip()), '$DIRECT'"
+curl -fsS "$DIRECT" | grep -q "EJS_core" || fail "direct emulatorjs URL should serve the player page"
+# Proxy back on restores the same-origin path.
+curl -fsS -b "$COOKIE" -X PATCH -H 'Content-Type: application/json' -d '{"proxy":true}' \
+  "http://127.0.0.1:$PORT/api/cards/$ID" | python3 -c "import sys,json;assert json.load(sys.stdin)['url']=='/emulator/'"
+curl -fsS -b "$COOKIE" -X POST "http://127.0.0.1:$PORT/api/cards/$ID/stop" >/dev/null || fail "emulatorjs stop failed"
+# After stop the same-origin proxy answers a localized stopped page.
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" "http://127.0.0.1:$PORT/emulator/")
+[ "$code" = "503" ] || fail "emulatorjs proxy after stop should be 503, got $code"
+curl -fsS -b "$COOKIE" -X DELETE "http://127.0.0.1:$PORT/api/cards/$ID" >/dev/null || fail "emulatorjs delete failed"
 
 echo "== friendly port message =="
 OUT=$("$BIN" serve --config "$CFG" --port "$PORT" 2>&1) || fail "second serve should exit 0"

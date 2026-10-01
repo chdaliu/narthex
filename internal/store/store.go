@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const (
@@ -44,6 +45,11 @@ const (
 	// WeTTY has no HTTP-layer auth: the browser authenticates with the
 	// SSH account of the configured sshHost (localhost by default).
 	KindWetty = "wetty"
+	// KindEmulatorJS launches the EmulatorJS retro-emulator player. Unlike
+	// the other kinds there is no external CLI: narthex re-execs its own
+	// binary (the hidden `emulator-serve` subcommand) to serve the player
+	// page and the selected ROM (see procman.startEmulatorJS).
+	KindEmulatorJS = "emulatorjs"
 )
 
 // ComfyUIConfig controls how ComfyUI servers are spawned.
@@ -150,6 +156,28 @@ type WettyConfig struct {
 	SSHUser string `json:"sshUser,omitempty"`
 }
 
+// EmulatorJSConfig controls the EmulatorJS retro-emulator card. The player
+// page is served by a narthex child process (the hidden `emulator-serve`
+// subcommand), reached either same-origin through the /emulator/ proxy or
+// directly on its own port.
+type EmulatorJSConfig struct {
+	// Hostname is the listen address of the EmulatorJS server. 0.0.0.0
+	// makes it reachable from other devices on the LAN.
+	Hostname string `json:"hostname"`
+	// PortRange is the range a free port is picked from.
+	PortRange [2]int `json:"portRange"`
+	// Dirs are the directories scanned for ROMs. The emulatorjs card kind
+	// is hidden while this list is empty.
+	Dirs []string `json:"dirs,omitempty"`
+	// DataPath is a local EmulatorJS data/ directory (loader.js, cores, …)
+	// used instead of the public CDN, so the player works offline. A leading
+	// ~/ is expanded; empty uses https://cdn.emulatorjs.org/<cdnVersion>/data/.
+	DataPath string `json:"dataPath,omitempty"`
+	// CDNVersion selects the CDN build when DataPath is empty: stable
+	// (default), latest or nightly.
+	CDNVersion string `json:"cdnVersion,omitempty"`
+}
+
 // Config is the persisted narthex configuration.
 type Config struct {
 	Hostname      string        `json:"hostname"`
@@ -167,6 +195,8 @@ type Config struct {
 	Vscodium VscodiumConfig `json:"vscodium"`
 	// Wetty controls the WeTTY terminal-over-web card.
 	Wetty WettyConfig `json:"wetty"`
+	// EmulatorJS controls the EmulatorJS retro-emulator card.
+	EmulatorJS EmulatorJSConfig `json:"emulatorjs"`
 	// Language selects the UI and CLI language: en (default), zh-CN, zh-TW.
 	Language string `json:"language"`
 	// SessionTTLHours is the session validity in hours (default 720 = 30 days).
@@ -221,6 +251,12 @@ func DefaultConfig() *Config {
 			PortRange: [2]int{4900, 5099},
 			SSHHost:   "localhost",
 		},
+		EmulatorJS: EmulatorJSConfig{
+			Hostname:   "0.0.0.0",
+			PortRange:  [2]int{5100, 5299},
+			Dirs:       []string{},
+			CDNVersion: "stable",
+		},
 	}
 }
 
@@ -242,6 +278,27 @@ func EnsureDir(dir string) error {
 		return fmt.Errorf("create config dir: %w", err)
 	}
 	return nil
+}
+
+// ExpandPath resolves a configured path against baseDir: a leading ~/ (or a
+// bare ~) expands to the user's home, an absolute path is returned as-is, a
+// relative path is joined with baseDir, and an empty path stays empty.
+func ExpandPath(baseDir, path string) string {
+	if path == "" {
+		return ""
+	}
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			if path == "~" {
+				return home
+			}
+			return filepath.Join(home, path[2:])
+		}
+	}
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(baseDir, path)
 }
 
 // LoadConfig reads and normalizes a config file.
@@ -303,6 +360,15 @@ func LoadConfig(path string) (*Config, error) {
 	if c.Wetty.SSHHost == "" {
 		c.Wetty.SSHHost = def.Wetty.SSHHost
 	}
+	if c.EmulatorJS.Hostname == "" {
+		c.EmulatorJS.Hostname = def.EmulatorJS.Hostname
+	}
+	if c.EmulatorJS.PortRange == [2]int{0, 0} {
+		c.EmulatorJS.PortRange = def.EmulatorJS.PortRange
+	}
+	if c.EmulatorJS.CDNVersion == "" {
+		c.EmulatorJS.CDNVersion = def.EmulatorJS.CDNVersion
+	}
 	if c.Language == "" {
 		c.Language = def.Language
 	}
@@ -332,10 +398,13 @@ type Card struct {
 	StartedAt  int64  `json:"startedAt"`
 	// Kind selects the managed app: "comfyui".
 	Kind string `json:"kind"`
-	// Dir is the project directory the card operates on. Only set for
-	// kinds that pick a project (mdbook); other kinds resolve their
-	// install directory at start time.
+	// Dir is the project directory the card operates on. Set for kinds that
+	// pick a project (mdbook) and for emulatorjs (the selected ROM file).
 	Dir string `json:"dir,omitempty"`
+	// DisableProxy turns off the same-origin reverse proxy for the
+	// proxy-capable kinds (mdbook/emulatorjs/opencode): the card then opens
+	// the app's own direct URL instead. Missing/false keeps the proxy on.
+	DisableProxy bool `json:"disableProxy,omitempty"`
 }
 
 // State is the persisted card list.
@@ -364,7 +433,7 @@ func LoadState(path string) (*State, error) {
 	seen := map[string]bool{}
 	kept := s.Cards[:0]
 	for _, c := range s.Cards {
-		if c.Kind != KindComfyUI && c.Kind != KindOpencode && c.Kind != KindMdbook && c.Kind != KindVSCode && c.Kind != KindVSCodium && c.Kind != KindWetty {
+		if c.Kind != KindComfyUI && c.Kind != KindOpencode && c.Kind != KindMdbook && c.Kind != KindVSCode && c.Kind != KindVSCodium && c.Kind != KindWetty && c.Kind != KindEmulatorJS {
 			continue
 		}
 		if seen[c.Kind] {

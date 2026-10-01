@@ -20,7 +20,7 @@ ICONS=(
   folder folder-open code braces terminal rocket database globe bot sparkles
   git-branch git-merge book book-open package layers cpu server cloud flame
   star zap hammer wrench palette camera music boxes pencil trash-2 search
-  plus x external-link power menu download
+  plus x external-link power menu download gamepad-2
 )
 
 BG_IDS=(1015 1018 1035 1036 1039 1043 1050 1053)

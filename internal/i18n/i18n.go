@@ -313,6 +313,21 @@ autostart 參數:
 		ZHCN: "mdBook 服务已停止,正在返回 Narthex 面板...",
 		ZHTW: "mdBook 服務已停止,正在返回 Narthex 面板...",
 	},
+	"gateway.emulatorStoppedTitle": {
+		EN:   "EmulatorJS is not running",
+		ZHCN: "EmulatorJS 未运行",
+		ZHTW: "EmulatorJS 未執行",
+	},
+	"gateway.emulatorStoppedBody": {
+		EN:   "The EmulatorJS service has stopped. Returning to the Narthex dashboard...",
+		ZHCN: "EmulatorJS 服务已停止,正在返回 Narthex 面板...",
+		ZHTW: "EmulatorJS 服務已停止,正在返回 Narthex 面板...",
+	},
+	"err.emulatorNoGame": {
+		EN:   "the selected file is not a recognized game under the configured directories (emulatorjs.dirs)",
+		ZHCN: "所选文件不是配置目录(emulatorjs.dirs)中可识别的游戏",
+		ZHTW: "所選檔案不是設定目錄(emulatorjs.dirs)中可識別的遊戲",
+	},
 	"err.sloganTooLong": {
 		EN:   "slogan must be 80 characters or fewer",
 		ZHCN: "标语最长 80 个字符",

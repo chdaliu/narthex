@@ -86,6 +86,18 @@ type Manager struct {
 	// WettySSHUser is the default SSH user (--ssh-user); empty lets WeTTY
 	// prompt for a username.
 	WettySSHUser string
+	// EmulatorHostname is the listen address passed to the EmulatorJS
+	// child server (0.0.0.0 makes it reachable from other devices).
+	EmulatorHostname string
+	// EmulatorPortRange is the range a free port is picked from for the
+	// EmulatorJS child server.
+	EmulatorPortRange [2]int
+	// EmulatorDataDir is an optional local EmulatorJS data/ directory the
+	// child serves (offline); empty uses the public CDN.
+	EmulatorDataDir string
+	// EmulatorCDNVersion is the CDN build used when EmulatorDataDir is
+	// empty (stable/latest/nightly).
+	EmulatorCDNVersion string
 }
 
 // New creates a Manager with sane defaults.
@@ -137,6 +149,12 @@ func (m *Manager) Start(kind, dir, id string) (pid int, port int, err error) {
 			return 0, 0, err
 		}
 		pid, err = m.startWetty(dir, id, port)
+	case store.KindEmulatorJS:
+		port, err = freePortIn(m.EmulatorPortRange)
+		if err != nil {
+			return 0, 0, err
+		}
+		pid, err = m.startEmulatorJS(dir, id, port)
 	default:
 		return 0, 0, fmt.Errorf("unsupported service kind: %s", kind)
 	}

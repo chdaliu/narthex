@@ -230,6 +230,54 @@ func TestMdbookLivereloadPathPassesThrough(t *testing.T) {
 	}
 }
 
+func TestEmulatorRedirectsUnauthenticated(t *testing.T) {
+	h := gateway.EmulatorHandler(testConfig(), func() i18n.Lang { return i18n.EN },
+		func() (string, bool) { return "", false })
+
+	res := doGet(t, h, "", "192.168.1.9:5199")
+	if res.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302", res.StatusCode)
+	}
+}
+
+func TestEmulatorStoppedPage(t *testing.T) {
+	h := gateway.EmulatorHandler(testConfig(), func() i18n.Lang { return i18n.EN },
+		func() (string, bool) { return "", false })
+
+	res := doGet(t, h, sessionCookie(), "127.0.0.1:9090")
+	if res.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", res.StatusCode)
+	}
+	body, _ := io.ReadAll(res.Body)
+	if !strings.Contains(string(body), "EmulatorJS is not running") {
+		t.Fatalf("stopped page = %q", body)
+	}
+}
+
+func TestEmulatorProxiesAndStripsPrefix(t *testing.T) {
+	var gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		io.WriteString(w, "player")
+	}))
+	defer upstream.Close()
+
+	h := gateway.EmulatorHandler(testConfig(), func() i18n.Lang { return i18n.EN },
+		func() (string, bool) { return hostOf(upstream), true })
+
+	res := doGetPath(t, h, sessionCookie(), "127.0.0.1:9090", "/emulator/")
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", res.StatusCode)
+	}
+	if gotPath != "/" {
+		t.Fatalf("upstream path = %q, want /", gotPath)
+	}
+	body, _ := io.ReadAll(res.Body)
+	if string(body) != "player" {
+		t.Fatalf("body = %q", body)
+	}
+}
+
 func TestServerLifecycle(t *testing.T) {
 	var s gateway.Server
 	if p := s.Port(); p != 0 {

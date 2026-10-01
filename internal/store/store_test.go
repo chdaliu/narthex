@@ -20,6 +20,24 @@ func TestDefaultConfig(t *testing.T) {
 	if c.SessionTTLHours != 720 {
 		t.Fatalf("default session TTL = %d, want 720", c.SessionTTLHours)
 	}
+	if c.EmulatorJS.CDNVersion != "stable" || c.EmulatorJS.PortRange != [2]int{5100, 5299} {
+		t.Fatalf("emulatorjs defaults = %+v", c.EmulatorJS)
+	}
+}
+
+func TestExpandPath(t *testing.T) {
+	home, _ := os.UserHomeDir()
+	cases := []struct{ base, in, want string }{
+		{"/cfg", "", ""},
+		{"/cfg", "sub/x", "/cfg/sub/x"},
+		{"/cfg", "/abs/x", "/abs/x"},
+		{"/cfg", "~/x", filepath.Join(home, "x")},
+	}
+	for _, c := range cases {
+		if got := ExpandPath(c.base, c.in); got != c.want {
+			t.Fatalf("ExpandPath(%q,%q) = %q, want %q", c.base, c.in, got, c.want)
+		}
+	}
 }
 
 func TestConfigRoundtrip(t *testing.T) {
@@ -107,7 +125,8 @@ func TestLoadStateKeepsOneCardPerKind(t *testing.T) {
 		{"id":"d","kind":"transmission","name":"tx"},
 		{"id":"e","kind":"opencode","name":"dup-oc"},
 		{"id":"f","kind":"weird","name":"obsolete"},
-		{"id":"g","kind":"wetty","name":"wt"}
+		{"id":"g","kind":"wetty","name":"wt"},
+		{"id":"h","kind":"emulatorjs","name":"emu","disableProxy":true}
 	]}`
 	if err := os.WriteFile(path, []byte(state), 0o600); err != nil {
 		t.Fatal(err)
@@ -116,8 +135,8 @@ func TestLoadStateKeepsOneCardPerKind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Cards) != 3 {
-		t.Fatalf("expected 3 cards (first per kind), got %+v", got.Cards)
+	if len(got.Cards) != 4 {
+		t.Fatalf("expected 4 cards (first per kind), got %+v", got.Cards)
 	}
 	if got.Cards[0].ID != "a" || got.Cards[0].Kind != KindComfyUI {
 		t.Fatalf("first comfyui card should win: %+v", got.Cards[0])
@@ -127,6 +146,9 @@ func TestLoadStateKeepsOneCardPerKind(t *testing.T) {
 	}
 	if got.Cards[2].ID != "g" || got.Cards[2].Kind != KindWetty {
 		t.Fatalf("wetty card should be kept: %+v", got.Cards[2])
+	}
+	if got.Cards[3].ID != "h" || got.Cards[3].Kind != KindEmulatorJS || !got.Cards[3].DisableProxy {
+		t.Fatalf("emulatorjs card should be kept with disableProxy: %+v", got.Cards[3])
 	}
 }
 

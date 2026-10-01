@@ -65,6 +65,10 @@ type Service struct {
 	// WettyBin returns the path to the wetty CLI, or "" when it is not
 	// installed. Defaults to procman.DetectWetty; overridable in tests.
 	WettyBin func() string
+	// EmulatorGames returns the ROM games found under the given
+	// directories. Defaults to procman.DetectEmulatorGames; overridable in
+	// tests.
+	EmulatorGames func(dirs []string) []procman.EmulatorGame
 	// Username is the decrypted login username (plaintext in memory only).
 	Username string
 	// Restart restarts the narthex process (re-exec or launchd kickstart).
@@ -111,12 +115,13 @@ func NewService(dir string, cfg *store.Config, state *store.State, backend procm
 		MdbookCreate: func(parent, name string) error {
 			return procman.CreateMdbookProject(procman.DetectMdbook(), parent, name)
 		},
-		VscodeBin:    procman.DetectVSCode,
-		VscodiumBin:  procman.DetectVSCodium,
-		WettyBin:     procman.DetectWetty,
-		Username:     username,
-		RestartDelay: 500 * time.Millisecond,
-		BootID:       store.RandomID(8),
+		VscodeBin:     procman.DetectVSCode,
+		VscodiumBin:   procman.DetectVSCodium,
+		WettyBin:      procman.DetectWetty,
+		EmulatorGames: procman.DetectEmulatorGames,
+		Username:      username,
+		RestartDelay:  500 * time.Millisecond,
+		BootID:        store.RandomID(8),
 	}
 }
 
@@ -173,6 +178,35 @@ func (s *Service) MdbookGatewayTarget() (addr string, ok bool) {
 		return net.JoinHostPort("127.0.0.1", strconv.Itoa(c.Port)), true
 	}
 	return "", false
+}
+
+// EmulatorGatewayTarget resolves the running EmulatorJS child server for the
+// same-origin proxy: the loopback address of the running emulatorjs card. ok
+// is false when no emulatorjs card is running.
+func (s *Service) EmulatorGatewayTarget() (addr string, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, c := range s.State.Cards {
+		if c.Kind != store.KindEmulatorJS || c.Port <= 0 {
+			continue
+		}
+		if !s.Backend.Status(c.Kind, c.PID, c.Port).Alive {
+			return "", false
+		}
+		return net.JoinHostPort("127.0.0.1", strconv.Itoa(c.Port)), true
+	}
+	return "", false
+}
+
+// proxyCapable reports whether kind supports the per-card reverse-proxy
+// toggle: its "Open" URL can be either the same-origin narthex proxy or the
+// app's own direct URL.
+func proxyCapable(kind string) bool {
+	switch kind {
+	case store.KindMdbook, store.KindEmulatorJS, store.KindOpencode:
+		return true
+	}
+	return false
 }
 
 // ReconcileGateway binds the opencode gateway listener if it is not bound
@@ -277,7 +311,7 @@ func (s *Service) view(c store.Card, reqHost string) CardView {
 		// is built from the visitor's request host so it works from other
 		// devices. An explicitly configured internal network address wins
 		// over the request host.
-		v.URL = s.instanceURL(reqHost, c.Kind, c.Port)
+		v.URL = s.instanceURL(reqHost, c.Kind, c.Port, proxyCapable(c.Kind) && !c.DisableProxy)
 		if c.Kind == store.KindOpencode {
 			v.APIURL = s.directURL(reqHost, c.Kind, c.Port)
 		}
@@ -288,19 +322,24 @@ func (s *Service) view(c store.Card, reqHost string) CardView {
 // instanceURL builds the base URL for a running card. When an internal
 // network address is configured it is used as-is (it may carry its own
 // port); otherwise the host mirrors how the visitor reached narthex (LAN
-// access) or falls back to loopback. opencode is served through the
-// narthex gateway so the browser never sees the native basic-auth prompt;
-// the VS Code-family kinds append their connection token (`?tkn=`)
-// because the server answers 403 without it.
-func (s *Service) instanceURL(reqHost, kind string, port int) string {
-	if kind == store.KindMdbook {
+// access) or falls back to loopback. The proxy-capable kinds (mdbook,
+// emulatorjs, opencode) return the same-origin proxy path when proxy is on
+// and their direct port URL otherwise; the VS Code-family kinds append their
+// connection token (`?tkn=`) because the server answers 403 without it.
+func (s *Service) instanceURL(reqHost, kind string, port int, proxy bool) string {
+	if kind == store.KindMdbook && proxy {
 		// mdBook is proxied same-origin under the dashboard listener, so
 		// the book is reachable through the same reverse proxy / tunnel as
 		// narthex with no extra port to expose. The root-relative URL
 		// keeps working behind any host or scheme.
 		return gateway.MdbookPrefix + "/"
 	}
-	if kind == store.KindOpencode && s.GatewayPort > 0 {
+	if kind == store.KindEmulatorJS && proxy {
+		// EmulatorJS is proxied same-origin under the dashboard listener the
+		// same way; the child server's direct port is used when proxy is off.
+		return gateway.EmulatorPrefix + "/"
+	}
+	if kind == store.KindOpencode && proxy && s.GatewayPort > 0 {
 		port = s.GatewayPort
 	}
 	base := s.baseURL(reqHost, kind, port)
@@ -367,6 +406,8 @@ func (s *Service) instanceHost(reqHost string, kind string) string {
 		host = s.Config.Vscodium.Hostname
 	case store.KindWetty:
 		host = s.Config.Wetty.Hostname
+	case store.KindEmulatorJS:
+		host = s.Config.EmulatorJS.Hostname
 	}
 	if !IsLoopback(host) && reqHost != "" {
 		if hostname, _, err := net.SplitHostPort(reqHost); err == nil {
@@ -724,6 +765,10 @@ func (s *Service) appUnavailableReason(kind string) string {
 		if s.WettyBin() == "" {
 			return "add.reason.notInstalled"
 		}
+	case store.KindEmulatorJS:
+		if len(s.Config.EmulatorJS.Dirs) == 0 {
+			return "add.reason.emulatorNoDirs"
+		}
 	}
 	return ""
 }
@@ -734,12 +779,13 @@ func (s *Service) appUnavailableReason(kind string) string {
 // the UI knows they must be hidden.
 func (s *Service) HandleMeta(w http.ResponseWriter, r *http.Request) {
 	apps := map[string]appInfo{
-		store.KindComfyUI:  s.appInfoFor(store.KindComfyUI),
-		store.KindOpencode: s.appInfoFor(store.KindOpencode),
-		store.KindMdbook:   s.appInfoFor(store.KindMdbook),
-		store.KindVSCode:   s.appInfoFor(store.KindVSCode),
-		store.KindVSCodium: s.appInfoFor(store.KindVSCodium),
-		store.KindWetty:    s.appInfoFor(store.KindWetty),
+		store.KindComfyUI:    s.appInfoFor(store.KindComfyUI),
+		store.KindOpencode:   s.appInfoFor(store.KindOpencode),
+		store.KindMdbook:     s.appInfoFor(store.KindMdbook),
+		store.KindVSCode:     s.appInfoFor(store.KindVSCode),
+		store.KindVSCodium:   s.appInfoFor(store.KindVSCodium),
+		store.KindWetty:      s.appInfoFor(store.KindWetty),
+		store.KindEmulatorJS: s.appInfoFor(store.KindEmulatorJS),
 	}
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"icons":           assetNames("assets/icons", ".svg"),

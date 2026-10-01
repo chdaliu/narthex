@@ -17,6 +17,7 @@ import (
 	"narthex/internal/api"
 	"narthex/internal/auth"
 	"narthex/internal/autostart"
+	"narthex/internal/emulatorserver"
 	"narthex/internal/i18n"
 	"narthex/internal/procman"
 	"narthex/internal/restart"
@@ -37,6 +38,10 @@ func main() {
 	switch os.Args[1] {
 	case "serve", "start":
 		err = cmdServe(os.Args[2:])
+	case "emulator-serve":
+		// Internal, undocumented: spawned by procman.startEmulatorJS because
+		// EmulatorJS ships no server of its own (narthex serves it itself).
+		err = cmdEmulatorServe(os.Args[2:])
 	case "setup":
 		err = cmdSetup(os.Args[2:])
 	case "passwd":
@@ -196,6 +201,10 @@ func cmdServe(args []string) error {
 	backend.WettySSHHost = cfg.Wetty.SSHHost
 	backend.WettySSHPort = cfg.Wetty.SSHPort
 	backend.WettySSHUser = cfg.Wetty.SSHUser
+	backend.EmulatorHostname = cfg.EmulatorJS.Hostname
+	backend.EmulatorPortRange = cfg.EmulatorJS.PortRange
+	backend.EmulatorDataDir = resolveFromDir(dir, cfg.EmulatorJS.DataPath)
+	backend.EmulatorCDNVersion = cfg.EmulatorJS.CDNVersion
 
 	state, err := store.LoadState(filepath.Join(dir, store.StateFile))
 	if err != nil {
@@ -268,7 +277,39 @@ func detectedApps(cfg *store.Config) []string {
 	if procman.DetectWetty() != "" {
 		labels = append(labels, "WeTTY")
 	}
+	if len(cfg.EmulatorJS.Dirs) > 0 {
+		labels = append(labels, "EmulatorJS")
+	}
 	return labels
+}
+
+// cmdEmulatorServe runs the EmulatorJS child server (the hidden
+// `emulator-serve` subcommand). It is spawned by procman.startEmulatorJS and
+// never run by users directly: EmulatorJS has no CLI/server, so narthex
+// re-execs itself to serve the player page, the ROM and an optional local
+// data/ directory.
+func cmdEmulatorServe(args []string) error {
+	fs := flag.NewFlagSet("emulator-serve", flag.ExitOnError)
+	rom := fs.String("rom", "", "ROM file path")
+	core := fs.String("core", "", "EmulatorJS core name")
+	name := fs.String("name", "", "game name")
+	host := fs.String("host", "0.0.0.0", "listen address")
+	port := fs.Int("port", 0, "listen port")
+	data := fs.String("data", "", "local EmulatorJS data/ directory (empty = CDN)")
+	cdn := fs.String("cdn", "stable", "CDN version (stable/latest/nightly)")
+	fs.Parse(args)
+	if *rom == "" || *core == "" || *port <= 0 {
+		return fmt.Errorf("emulator-serve: --rom, --core and --port are required")
+	}
+	return emulatorserver.Run(emulatorserver.Options{
+		ROM:        *rom,
+		Core:       *core,
+		Name:       *name,
+		Hostname:   *host,
+		Port:       *port,
+		DataDir:    *data,
+		CDNVersion: *cdn,
+	})
 }
 
 // firstRunSetup creates a fresh config with a random password when none
@@ -305,21 +346,7 @@ func firstRunSetup(configPath string, cfg *store.Config, L func(string, ...any) 
 // home, an absolute path is returned as-is, and a relative path is joined
 // with dir.
 func resolveFromDir(dir, path string) string {
-	if path == "" {
-		return ""
-	}
-	if path == "~" || strings.HasPrefix(path, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			if path == "~" {
-				return home
-			}
-			return filepath.Join(home, path[2:])
-		}
-	}
-	if filepath.IsAbs(path) {
-		return path
-	}
-	return filepath.Join(dir, path)
+	return store.ExpandPath(dir, path)
 }
 
 // dataDirFor returns the server data directory for a code-family kind:

@@ -2,12 +2,12 @@
 
 [中文文档](docs/README.zh-CN.md) · [Agent Guide](docs/agents/)
 
-After entering a username and password, launch and stop your local apps (**ComfyUI servers**, **opencode web**, **mdBook docs**, **VS Code/VSCodium web**, **WeTTY terminal**) from the web and jump straight to their web UIs. Each app type has at most one card, identified by its type: live status, memory usage, one-click start/stop, configurable icon and background. The UI is a minimalist glassmorphism design (translucent panels over a background image) and adapts to any screen size.
+After entering a username and password, launch and stop your local apps (**ComfyUI servers**, **opencode web**, **mdBook docs**, **VS Code/VSCodium web**, **WeTTY terminal**, **EmulatorJS retro games**) from the web and jump straight to their web UIs. Each app type has at most one card, identified by its type: live status, memory usage, one-click start/stop, configurable icon and background. The UI is a minimalist glassmorphism design (translucent panels over a background image) and adapts to any screen size.
 
 ## Features
 
 - **Super lightweight**: single static binary with the frontend and assets embedded via `go:embed`; ~10 MB idle memory; zero dependencies except `golang.org/x/crypto`
-- **Card management**: editable icons (37 Lucide icons) and backgrounds (8 free photos); one card per app type (`comfyui` / `opencode` / `mdbook` / `vscode` / `vscodium` / `wetty`), no paths involved (except the mdBook card, which points at a book project directory)
+- **Card management**: editable icons (38 Lucide icons) and backgrounds (8 free photos); one card per app type (`comfyui` / `opencode` / `mdbook` / `vscode` / `vscodium` / `wetty` / `emulatorjs`), no paths involved (except the mdBook card, which points at a book project directory, and the EmulatorJS card, which points at a ROM file)
 - **App detection**: the installed apps are detected at startup; **apps that are not installed are not shown** — no add entry, no create/start
   - `comfyui` cards start a **ComfyUI server** (`python main.py --port <n> --listen 0.0.0.0`); the code directory and interpreter are resolved from ComfyUI Desktop's install records (`installations.json`, overridable via `NARTHEX_COMFY_DESKTOP_DIR`). The server mirrors the desktop app's storage: the shared model paths config (`--extra-model-paths-config`, so models downloaded by the desktop app are visible without re-downloading), the shared or per-install input/output directories, and the instance's extra launch args (e.g. `--enable-manager`) are passed through. The port is picked from a configurable range (default 4100–4299) and the server listens on `0.0.0.0` for **LAN access** — the "Open" button is `http://127.0.0.1:<port>/` locally and `http://<dashboard host>:<port>/` from other devices
   - `opencode` cards start the **opencode web UI** (`opencode web --port <n> --hostname 0.0.0.0`) — AI coding in the browser. The port is picked from a configurable range (default 4300–4499) and the server listens on `0.0.0.0` for **LAN access**. Because the server binds a non-loopback address, a **random password is generated once and persisted** (`OPENCODE_SERVER_PASSWORD`, username `opencode`); the **username, password and direct API address are shown in the card detail popup and can be copied by clicking**, and printed on first serve startup. Browsers never talk to opencode directly: the **"Open" URL points at a narthex gateway** (a fixed port, `opencode.gatewayPort` default 4399, gated by your narthex session; a free port is used when it is occupied) that injects the basic-auth credentials server-side — no native auth prompt, and no blank page from opencode's `crossorigin` asset bug. The gateway listener stays bound for the **whole serve lifetime**, so a stale opencode tab always gets a response (login redirect, or a localized "opencode is not running" page that returns you to the dashboard) instead of a connection-refused blank page; it only proxies while the opencode card is running. The card's **"API" row** is the direct `http://<host>:<port>/` endpoint (same password), so remote clients such as `opencode attach http://<host>:<port> --password <pw>` or the SDK keep working. Starting the card does **not open a browser on the host** — use the "Open" button
@@ -15,7 +15,8 @@ After entering a username and password, launch and stop your local apps (**Comfy
   - `vscode` cards start the **VS Code web server** (`code serve-web --host 0.0.0.0 --port <n> --server-data-dir <dir>`). The kind appears when the **`code` CLI** is installed. Because the server binds a non-loopback address, a **random connection token is generated once and persisted** (`vscode.connectionToken`); the token is shown in the card detail popup and copied by clicking, and the "Open" URL carries it (`?tkn=`) so the browser authenticates on first load. No folder is selected up front — the browser lets you pick a folder from the server's filesystem
   - `vscodium` cards start the **VSCodium web server** (`codium serve-web --host 0.0.0.0 --port <n> --server-data-dir <dir>`), an independent kind from VS Code so both can run at the same time. The kind appears when the **`codium` CLI** is installed; its token is generated and persisted separately (`vscodium.connectionToken`), and its "Open" URL carries it the same way. `--server-data-dir` pins **server-side** data; to make settings survive different browsers, private windows or Safari's storage eviction, put them in the **server-side Machine settings** — set `vscode.machineSettingsFile`/`vscodium.machineSettingsFile` to a JSON seed file (its missing keys are filled into `<server-data-dir>/data/Machine/settings.json`; existing keys win) and/or use **Preferences → Open Remote Settings**. Note: browser *user* settings are **not** stored server-side and can be evicted (see the FAQ)
   - `wetty` cards start the **WeTTY terminal-over-web server** (`wetty --port <n> --host 0.0.0.0`) — a terminal in the browser. The kind appears when the **`wetty` CLI** is installed. WeTTY has **no HTTP-layer auth**: the browser prompts for the SSH account of `wetty.sshHost` (default `localhost`, so enable Remote Login/SSH on the host). The listen address, port range and SSH target come from `wetty.*`; the card shows no credentials
-  - `comfyui` is detected in `/Applications` and `~/Applications` (overridable via `NARTHEX_COMFY_APP_DIR`); `opencode` is detected by the `opencode` CLI on PATH (overridable via `NARTHEX_OPENCODE_BIN`); `mdbook` by the `mdbook` CLI (overridable via `NARTHEX_MDBOOK_BIN`); VS Code by the `code` CLI (overridable via `NARTHEX_VSCODE_BIN`); VSCodium by the `codium` CLI (overridable via `NARTHEX_VSCODIUM_BIN`); WeTTY by the `wetty` CLI (overridable via `NARTHEX_WETTY_BIN`)
+  - `emulatorjs` cards start the **EmulatorJS retro-emulator player** — play NES/SNES/Game Boy/Genesis/PlayStation/… games in the browser. EmulatorJS ships **no CLI/server of its own**, so narthex re-execs its own binary (the internal `emulator-serve` subcommand) to serve the generated player page, the selected ROM and an optional local EmulatorJS `data/` directory. The kind appears when **`emulatorjs.dirs` is non-empty**; picking it lists the ROMs found (recursively) under each configured directory, the core is auto-detected from the file extension (`game.nes.zip` works too) and the chosen ROM path is stored on the card. The player is **proxied same-origin under `/emulator/`** on the dashboard listener (session-gated) by default, so it needs no extra port; the card's edit modal has a **reverse-proxy toggle** that switches to the child's direct port instead. By default the loader and cores load from the **public CDN** (`cdn.emulatorjs.org`); set `emulatorjs.dataPath` to a local `data/` directory for **fully offline** play (`emulatorjs.cdnVersion` picks the CDN build otherwise). Note: threaded cores are unavailable (narthex does not send COOP/COEP headers, to keep the dashboard working)
+  - `comfyui` is detected in `/Applications` and `~/Applications` (overridable via `NARTHEX_COMFY_APP_DIR`); `opencode` is detected by the `opencode` CLI on PATH (overridable via `NARTHEX_OPENCODE_BIN`); `mdbook` by the `mdbook` CLI (overridable via `NARTHEX_MDBOOK_BIN`); VS Code by the `code` CLI (overridable via `NARTHEX_VSCODE_BIN`); VSCodium by the `codium` CLI (overridable via `NARTHEX_VSCODIUM_BIN`); WeTTY by the `wetty` CLI (overridable via `NARTHEX_WETTY_BIN`); EmulatorJS needs no external binary (narthex serves it itself; overridable via `NARTHEX_EMULATOR_BIN` in tests)
 - **Instance management**: instance processes are managed by narthex (own process group, whole-tree termination); status dot + health check (TCP) + memory (RSS) + uptime; instances re-associate after a narthex restart
 - **Password change**: `narthex passwd` resets the password and rotates the session key, invalidating every session at once
 - **Account management**: the username (default `narthex`) and password can be changed on the top-bar "Account" page or via `reset-auth`; the username is stored **encrypted (AES-256-GCM)** in the config, and only the argon2id hash of the password is ever stored
@@ -33,6 +34,7 @@ After entering a username and password, launch and stop your local apps (**Comfy
 - `vscode` cards need the **VS Code (`code`) CLI** on PATH (overridable via `NARTHEX_VSCODE_BIN`)
 - `vscodium` cards need the **VSCodium (`codium`) CLI** on PATH (overridable via `NARTHEX_VSCODIUM_BIN`)
 - `wetty` cards need the **WeTTY CLI** on PATH (overridable via `NARTHEX_WETTY_BIN`) **and** an SSH server on `wetty.sshHost` (default `localhost`) to log into
+- `emulatorjs` cards need **no external binary**: just set `emulatorjs.dirs` to one or more directories containing ROMs (the player assets come from the CDN by default, or from `emulatorjs.dataPath` for offline use)
 - macOS or Linux (memory: `ps` on macOS, `/proc/<pid>/status` on Linux)
 
 ## Quick start
@@ -70,7 +72,7 @@ Open `http://127.0.0.1:9090` in a browser and enter the username (`narthex`) and
 | `--hostname <h>` | Override the listen address (`0.0.0.0` for LAN access) |
 | `--lang <lang>` | Language for this run: `en` (default) / `zh-CN` / `zh-TW`, overrides the config value |
 
-At startup the detected apps are printed, e.g. `detected apps: ComfyUI, opencode, MdBook, VS Code, VSCodium, WeTTY`; apps that are not installed never appear in the UI.
+At startup the detected apps are printed, e.g. `detected apps: ComfyUI, opencode, MdBook, VS Code, VSCodium, WeTTY, EmulatorJS`; apps that are not installed never appear in the UI.
 
 > To keep it running: use `narthex autostart install` (macOS launchd) — see [Auto-start](#auto-start). On Linux use systemd or `nohup ./build/narthex serve &`.
 > Starting twice: if a narthex is already listening on the port, serve prints "already running" and exits cleanly instead of failing.
@@ -111,11 +113,11 @@ The **Settings** modal in the dashboard also has a "Start at login" switch for t
 
 ## Usage
 
-1. **Add a card**: click "Add card" → choose the app (**ComfyUI** / **opencode** / **MdBook** / **VS Code** / **VSCodium** / **WeTTY**) → set the name/icon/background → create. All app types are listed; the ones that cannot be added are greyed out with the reason (not installed, ComfyUI Desktop without a managed instance, mdbook without a configured book directory, or already has a card — one card per type) → set the name/icon/background → create. No paths, no search — the app bundle is auto-detected at start time (the **MdBook** kind first asks you to pick one of the books found under `mdbook.dirs`, or create a new one there; that project directory is stored on the card)
+1. **Add a card**: click "Add card" → choose the app (**ComfyUI** / **opencode** / **MdBook** / **VS Code** / **VSCodium** / **WeTTY** / **EmulatorJS**) → set the name/icon/background → create. All app types are listed; the ones that cannot be added are greyed out with the reason (not installed, ComfyUI Desktop without a managed instance, mdbook without a configured book directory, EmulatorJS without a configured game directory, or already has a card — one card per type). No paths, no search — the app bundle is auto-detected at start time (the **MdBook** kind first asks you to pick one of the books found under `mdbook.dirs`, or create a new one there; the **EmulatorJS** kind asks you to pick one of the ROMs found under `emulatorjs.dirs`; that directory/file is stored on the card)
 2. **Start/stop**: click "Start" or "Stop" on a card; starting instances show "Starting…" and become a green status dot with memory usage and uptime once ready
-3. **Open**: click "Open" to open the web UI in a new tab. **ComfyUI**, **VS Code**, **VSCodium** and **WeTTY** open `http://<host>:<port>/` directly (the VS Code/VSCodium links carry their connection token as `?tkn=` so the browser authenticates automatically); **opencode** goes through the narthex gateway so it opens with no prompt; **mdBook** opens the same-origin `/mdbook/` path on the dashboard (no extra port, works through a single-port reverse proxy/tunnel). ComfyUI/VS Code/VSCodium/WeTTY listen on `0.0.0.0`, so other devices reach them through the same hostname as the dashboard. If an **internal network address** is configured in Settings, their jump address uses it instead (see [Configuration](#configuration)).
+3. **Open**: click "Open" to open the web UI in a new tab. **ComfyUI**, **VS Code**, **VSCodium** and **WeTTY** open `http://<host>:<port>/` directly (the VS Code/VSCodium links carry their connection token as `?tkn=` so the browser authenticates automatically); **opencode** goes through the narthex gateway so it opens with no prompt; **mdBook** and **EmulatorJS** open the same-origin `/mdbook/` / `/emulator/` paths on the dashboard (no extra port, works through a single-port reverse proxy/tunnel) — their cards' edit modal has a **reverse-proxy toggle** that switches the "Open" URL to the app's own direct port instead. ComfyUI/VS Code/VSCodium/WeTTY listen on `0.0.0.0`, so other devices reach them through the same hostname as the dashboard. If an **internal network address** is configured in Settings, their jump address uses it instead (see [Configuration](#configuration)).
 4. **Card details**: clicking a card opens a detail popup showing whatever it has — status, type, uptime, memory, port, directory and URL, plus the credentials: the **opencode card** shows the web login username, password and direct API address (username `opencode`), and the **VS Code / VSCodium cards** show their connection tokens; click any credential row to copy it. The **WeTTY card shows no credentials**: the browser prompts for the SSH account of `wetty.sshHost` (default `localhost`). Credentials, edit and delete are not shown on the card face — the popup carries the **Edit** and **Delete** actions.
-5. **Edit**: change the name, icon or background from the card detail popup; the **opencode card** also edits its **gateway port** (the fixed local port behind the "Open" address — a free port is used while it is occupied, and changing it rebinds the gateway immediately); deleting a card stops the app first
+5. **Edit**: change the name, icon or background from the card detail popup; the **opencode card** also edits its **gateway port** (the fixed local port behind the "Open" address — a free port is used while it is occupied, and changing it rebinds the gateway immediately), and the **mdBook/EmulatorJS/opencode cards** have a **reverse-proxy toggle** (on: open through the narthex proxy; off: open the app's own direct URL); deleting a card stops the app first
 6. **Settings**: the top-bar "Settings" button → language / page background (incl. upload) / slogan (toggle and custom text) / **internal network address** / start-at-login toggle (macOS); all apply instantly
    - **Internal network address**: once set, card "Open" buttons jump to this host (IP or hostname, may include a port) instead of the address you reached Narthex from; leave empty to keep the current access address (the field's placeholder shows the current address)
 7. **Account**: the top-bar "Account" button → a dedicated page to change the username and password (current password required); saving invalidates sessions on other devices
@@ -146,7 +148,8 @@ The **Settings** modal in the dashboard also has a "Start at login" switch for t
   "mdbook": { "hostname": "0.0.0.0", "portRange": [4500, 4699], "dirs": ["~/books"] },
   "vscode": { "hostname": "0.0.0.0", "portRange": [4700, 4899], "connectionToken": "<auto-generated>", "machineSettingsFile": "vscode-machine.json" },
   "vscodium": { "hostname": "0.0.0.0", "portRange": [4700, 4899], "connectionToken": "<auto-generated>", "machineSettingsFile": "vscodium-machine.json" },
-  "wetty": { "hostname": "0.0.0.0", "portRange": [4900, 5099], "sshHost": "localhost" }
+  "wetty": { "hostname": "0.0.0.0", "portRange": [4900, 5099], "sshHost": "localhost" },
+  "emulatorjs": { "hostname": "0.0.0.0", "portRange": [5100, 5299], "dirs": ["~/roms"], "dataPath": "", "cdnVersion": "stable" }
 }
 ```
 
@@ -178,6 +181,11 @@ The **Settings** modal in the dashboard also has a "Start at login" switch for t
 - `wetty.sshHost`: the SSH server WeTTY connects to (`--ssh-host`), default `localhost` (the narthex host). Set it to reach a remote machine
 - `wetty.sshPort`: the SSH server port (`--ssh-port`); omit to use WeTTY's default (22)
 - `wetty.sshUser`: the default SSH user (`--ssh-user`); omit to be prompted in the browser. WeTTY has **no HTTP-layer auth** — the SSH account is the only protection
+- `emulatorjs.hostname`: EmulatorJS child server listen address, `0.0.0.0` by default (LAN access; set `127.0.0.1` for local-only). The browser reaches the player through the same-origin `/emulator/` proxy, so this only affects direct access to the backing server
+- `emulatorjs.portRange`: the range the EmulatorJS child server ports are picked from, default [5100, 5299]
+- `emulatorjs.dirs`: directories scanned (recursively) for ROMs; while empty, the EmulatorJS card kind is hidden entirely
+- `emulatorjs.dataPath`: a local EmulatorJS `data/` directory (loader, cores, …) served instead of the CDN, for offline play; a leading `~/` is expanded. Empty uses the CDN
+- `emulatorjs.cdnVersion`: the CDN build used when `dataPath` is empty: `stable` (default), `latest` or `nightly`
 - Data files: state `state.json` (cards by app type, one per type), per-instance logs `logs/<cardID>.log`, uploads `uploads/` and the VS Code/VSCodium server data (`vscode-data/` / `vscodium-data/`, set via `--server-data-dir`, including the seeded `data/Machine/settings.json`) live next to the config
 
 ## External access (on by default)
@@ -187,7 +195,7 @@ Narthex listens on **`0.0.0.0`** by default, so the dashboard is reachable from 
 - From this machine: `http://127.0.0.1:9090`
 - From the LAN/internet: `http://<machine IP>:9090` (e.g. `http://192.168.1.100:9090`)
 
-Some apps are served **through narthex itself**, so they work behind a single exposed port (a reverse proxy or tunnel that only forwards the dashboard): **mdBook** is proxied same-origin at `/mdbook/`, and **opencode** through its gateway (`opencode.gatewayPort`, default 4399). ComfyUI, VS Code, VSCodium and WeTTY are opened on their own ports, so a single-port proxy must forward those too (or set an **internal network address** that reaches them).
+Some apps are served **through narthex itself**, so they work behind a single exposed port (a reverse proxy or tunnel that only forwards the dashboard): **mdBook** is proxied same-origin at `/mdbook/`, **EmulatorJS** at `/emulator/`, and **opencode** through its gateway (`opencode.gatewayPort`, default 4399). ComfyUI, VS Code, VSCodium and WeTTY are opened on their own ports, so a single-port proxy must forward those too (or set an **internal network address** that reaches them). The mdBook/EmulatorJS/opencode cards have a per-card **reverse-proxy toggle**: turn it off to open the app's own direct port instead (useful when the proxy path is not wanted, e.g. to debug the backing server).
 
 **For local-only use, tighten it up**:
 
@@ -212,16 +220,18 @@ narthex serve --hostname 127.0.0.1              # for this run
 | GET | `/api/session` | Whether the session is valid, plus the UI language (the login page renders accordingly) |
 | POST | `/api/account` | Change username/password (current password required), rotates the session key |
 | GET | `/api/cards` | Card list (with running/healthy/memoryKB/uptime/url) |
-| POST | `/api/cards` | Create a card (`kind`: `comfyui`/`opencode`/`mdbook`/`vscode`/`vscodium`/`wetty`; 400 when the app is not installed, 409 on duplicate kind; `mdbook` also requires `dir`, a recognized project) |
+| POST | `/api/cards` | Create a card (`kind`: `comfyui`/`opencode`/`mdbook`/`vscode`/`vscodium`/`wetty`/`emulatorjs`; 400 when the app is not installed, 409 on duplicate kind; `mdbook` also requires `dir`, a recognized project; `emulatorjs` requires `dir`, a recognized ROM) |
 | POST | `/api/cards/reorder` | Persist card order (`{ids:[...]}` in the desired order; unknown/duplicate IDs ignored, unmentioned cards keep their relative order at the end) |
-| PATCH | `/api/cards/{id}` | Edit name/icon/background |
+| PATCH | `/api/cards/{id}` | Edit name/icon/background; for mdbook/emulatorjs/opencode, `{proxy:bool}` toggles the same-origin reverse proxy (false = open the app's direct URL) |
 | DELETE | `/api/cards/{id}` | Delete (stops the app first) |
 | POST | `/api/cards/{id}/start` | Start the app (bundle auto-detected at start time) |
 | POST | `/api/cards/{id}/stop` | Stop the app |
 | GET | `/api/meta` | Icon/background presets (incl. uploads), detected apps (`apps` with installed/label) and current settings (incl. `internalAddress`) |
 | GET | `/api/mdbook/projects` | List the configured `mdbook.dirs` and the recognized book projects under them (`{dirs, projects:[{name,path}]}`) |
 | POST | `/api/mdbook/projects` | Create a new book in a configured directory (`{dir, name}` → runs `mdbook init`) |
+| GET | `/api/emulator/games` | List the configured `emulatorjs.dirs` and the recognized ROMs under them (`{dirs, games:[{name,path,core,system}]}`) |
 | GET | `/mdbook/...` | Same-origin reverse proxy to the running mdBook server (session-gated; `/mdbook/` maps to the book root, `/__livereload` streams live reload) |
+| GET | `/emulator/...` | Same-origin reverse proxy to the running EmulatorJS server (session-gated; `/emulator/` is the player page, `/emulator/rom` the ROM, `/emulator/data/...` a local `data/` dir when configured) |
 | POST | `/api/settings` | Update settings: `language` / `pageBackground` / `slogan` / `internalAddress` / `gatewayPort`, persisted to the config |
 | GET | `/api/autostart` | Report the macOS launchd auto-start state for `narthex serve` (`{supported, installed, loaded, label, plistPath}`) |
 | POST | `/api/autostart` | Install (`{action:"install"}`) or uninstall (`{action:"uninstall"}`) the user-level serve job |
@@ -244,6 +254,7 @@ All endpoints except login/session/logout require the session cookie; `/uploads/
 - **VSCodium card won't start?** Same as VS Code, but with the **`codium` CLI** (or `NARTHEX_VSCODIUM_BIN`): Narthex runs `codium serve-web --host 0.0.0.0 --port <n> --connection-token <token> --server-data-dir <config>/vscodium-data`; the port is picked from `vscodium.portRange` (default 4700–4899). It is an independent kind, so it can run alongside a VS Code card
 - **VS Code/VSCodium settings don't save (even in a normal window; e.g. Safari)?** The web version of VS Code stores **user settings in the browser** (IndexedDB, database `vscode-web-db`), keyed by origin, and browsers may discard it — private windows block it, Safari evicts script-writable storage (ITP 7-day cap/eviction) and can silently drop IndexedDB writes. So the default Settings UI is not a durable store. To persist, save to the **server-side Machine settings**: either set `vscode.machineSettingsFile`/`vscodium.machineSettingsFile` to a JSON seed file, or use **Preferences → Open Remote Settings** (writes `<config>/vscode-data/data/Machine/settings.json`). Machine settings survive any browser and window mode; note that some application-scope settings (themes, …) can only be set in User settings and therefore cannot be persisted this way. Also keep the **origin stable** — opening the card from a different hostname/IP (or a changed port) is a different browser origin with separate storage
 - **WeTTY card won't start?** The **`wetty` CLI** must be installed (`npm -g i wetty`, or set `NARTHEX_WETTY_BIN`). Narthex runs `wetty --port <n> --host 0.0.0.0 --ssh-host <host>` in your home directory; the port is picked from `wetty.portRange` (default 4900–5099). The browser then asks for the **SSH username/password** of `wetty.sshHost` (default `localhost`), so the host must have an SSH server running (macOS: System Settings → General → Sharing → Remote Login). WeTTY itself has no HTTP login, so anyone who can reach the port sees the SSH prompt — set `wetty.hostname` to `127.0.0.1` to keep it local
+- **EmulatorJS card won't start?** **No external binary is needed** — just set `emulatorjs.dirs` to one or more directories containing ROMs (the leftover ROM file extension must be one EmulatorJS recognizes: `.nes`, `.smc`, `.gb`/`.gbc`, `.gba`, `.n64`/`.z64`, `.nds`, `.md`/`.gen`, `.sms`/`.gg`, `.pce`, `.a26`/`.a78`, `.c64`, `.adf`, `.psx`/`.iso`/`.cue`, …; archives like `game.nes.zip` work too). Picking the kind lists the ROMs and stores the chosen file on the card. Narthex re-execs its own binary (the internal `emulator-serve` subcommand) to serve the player + ROM; the port is picked from `emulatorjs.portRange` (default 5100–5299). The player is proxied same-origin at `/emulator/` (session-gated) by default; the edit modal's reverse-proxy toggle opens the child's direct port instead. Assets load from `cdn.emulatorjs.org` unless `emulatorjs.dataPath` points at a local `data/` directory. **Threaded cores are unavailable** (narthex omits COOP/COEP headers so the dashboard keeps working)
 - **Settings → Restart didn't pick up my changes?** Run `make build` (or `go build`) first: restart re-executes the binary at the same path (or kickstarts the launchd job). If you started Narthex with `make run`/`go run`, restart re-runs that temporary binary instead — run `./build/narthex serve` so the button reloads your build
 
 ## Security notes
@@ -262,19 +273,22 @@ make smoke               # end-to-end smoke test (uses fake .app bundles, never 
 
 ## Asset sources
 
-- Icons: [Lucide](https://lucide.dev), ISC license
+- Icons: [Lucide](https://lucide.dev), ISC license (38 icons)
 - Backgrounds: [Lorem Picsum](https://picsum.photos) (photos from Unsplash, free to use)
+- Retro emulation: [EmulatorJS](https://emulatorjs.org/) (GPL-3.0; loaded at runtime from the CDN or a local `data/` dir, not bundled)
 - Assets are committed to the repository, so builds work offline; refresh with `scripts/download-assets.sh`
 
 ## Layout
 
 ```
-cmd/narthex/       entrypoint (serve / setup / passwd / reset-auth / autostart subcommands)
+cmd/narthex/       entrypoint (serve / setup / passwd / reset-auth / autostart subcommands; hidden emulator-serve)
 internal/api/      HTTP handlers and card business logic
 internal/auth/     argon2id passwords, HMAC sessions, rate limiting
 internal/autostart/  macOS launchd install/uninstall/status (serve)
+internal/emulatorserver/  EmulatorJS player page + ROM server (run by the emulator-serve child)
 internal/i18n/     CLI/API message catalogs (en / zh-CN / zh-TW)
-internal/procman/  Backend abstraction, local instance lifecycle (ComfyUI server, opencode/mdbook/VS Code/VSCodium/WeTTY web), install & .app detection
+internal/gateway/  opencode + mdBook + EmulatorJS reverse proxies
+internal/procman/  Backend abstraction, local instance lifecycle (ComfyUI server, opencode/mdbook/VS Code/VSCodium/WeTTY web, EmulatorJS child), install & .app detection
 internal/secretbox/  username encryption at rest (AES-256-GCM, key derived from sessionSecret)
 internal/server/   routing, auth middleware, static files
 internal/store/    config and state persistence

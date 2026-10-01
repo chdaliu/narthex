@@ -152,6 +152,18 @@ func wettyInstalled(s *api.Service) {
 	s.WettyBin = func() string { return "/usr/bin/wetty" }
 }
 
+// emulatorInstalled configures the EmulatorJS seams: the configured game
+// directory is gamesDir and the real filesystem scan runs against it. When
+// gamePath is non-empty a real ROM file is written there so it is detected.
+func emulatorInstalled(s *api.Service, gamesDir, gamePath string) {
+	s.EmulatorGames = procman.DetectEmulatorGames
+	s.Config.EmulatorJS.Dirs = []string{gamesDir}
+	if gamePath != "" {
+		_ = os.MkdirAll(filepath.Dir(gamePath), 0o755)
+		_ = os.WriteFile(gamePath, []byte("rom"), 0o600)
+	}
+}
+
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
 	return newTestEnvWith(t, nil)
@@ -1876,6 +1888,7 @@ func TestMetaAppsIncludesNewKinds(t *testing.T) {
 		vscodeInstalled(s)
 		vscodiumInstalled(s)
 		wettyInstalled(s)
+		emulatorInstalled(s, filepath.Join(root, "roms"), "")
 	})
 	cookie := loginCookie(t, env.base, testPassword)
 	res, m := doReq(t, "GET", env.base+"/api/meta", cookie, nil)
@@ -1884,11 +1897,157 @@ func TestMetaAppsIncludesNewKinds(t *testing.T) {
 	}
 	apps, _ := m["apps"].(map[string]any)
 	for kind, want := range map[string]bool{
-		"comfyui": true, "opencode": true, "mdbook": true, "vscode": true, "vscodium": true, "wetty": true,
+		"comfyui": true, "opencode": true, "mdbook": true, "vscode": true, "vscodium": true, "wetty": true, "emulatorjs": true,
 	} {
 		a, _ := apps[kind].(map[string]any)
 		if a == nil || a["installed"] != want {
 			t.Fatalf("meta apps.%s = %v", kind, apps)
 		}
+	}
+}
+
+func TestEmulatorJSCardFlow(t *testing.T) {
+	root := t.TempDir()
+	gamesDir := filepath.Join(root, "roms")
+	gamePath := filepath.Join(gamesDir, "mario.nes")
+	env := newTestEnvFull(t, nil, func(s *api.Service) {
+		emulatorInstalled(s, gamesDir, gamePath)
+	})
+	cookie := loginCookie(t, env.base, testPassword)
+
+	// meta reports the kind as installed and labelled.
+	res, m := doReq(t, "GET", env.base+"/api/meta", cookie, nil)
+	apps, _ := m["apps"].(map[string]any)
+	em, _ := apps["emulatorjs"].(map[string]any)
+	if em == nil || em["installed"] != true || em["label"] != "EmulatorJS" {
+		t.Fatalf("meta apps.emulatorjs = %v", apps)
+	}
+
+	// The games endpoint lists the recognized ROMs.
+	res, m = doReq(t, "GET", env.base+"/api/emulator/games", cookie, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET games = %d", res.StatusCode)
+	}
+	games, _ := m["games"].([]any)
+	if len(games) != 1 {
+		t.Fatalf("games = %v", m["games"])
+	}
+	g0, _ := games[0].(map[string]any)
+	if g0["path"] != gamePath || g0["core"] != "fceumm" {
+		t.Fatalf("game = %v", g0)
+	}
+
+	// A card requires a recognized ROM.
+	res, m = doReq(t, "POST", env.base+"/api/cards", cookie, map[string]string{"kind": "emulatorjs"})
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("create emulatorjs without dir = %d, want 400 (%v)", res.StatusCode, m)
+	}
+	res, m = doReq(t, "POST", env.base+"/api/cards", cookie, map[string]any{"kind": "emulatorjs", "dir": filepath.Join(root, "other.nes")})
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("create emulatorjs with unknown dir = %d, want 400 (%v)", res.StatusCode, m)
+	}
+
+	res, m = doReq(t, "POST", env.base+"/api/cards", cookie, map[string]any{"kind": "emulatorjs", "dir": gamePath})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("create emulatorjs = %d %v", res.StatusCode, m)
+	}
+	if m["kind"] != "emulatorjs" || m["dir"] != gamePath || m["name"] != "EmulatorJS" || m["icon"] != "gamepad-2" {
+		t.Fatalf("emulatorjs defaults = %v", m)
+	}
+	id := cardID(t, m)
+
+	// Start passes the ROM path to the backend (a spawned narthex child).
+	res, m = doReq(t, "POST", env.base+"/api/cards/"+id+"/start", cookie, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("start emulatorjs = %d %v", res.StatusCode, m)
+	}
+	calls := env.backend.startCalls()
+	if len(calls) != 1 || calls[0] != "emulatorjs|"+gamePath+"|"+id {
+		t.Fatalf("start calls = %v", calls)
+	}
+	// Proxy is on by default: the "Open" URL is the same-origin path.
+	if m["url"] != "/emulator/" {
+		t.Fatalf("emulatorjs url = %v, want /emulator/", m["url"])
+	}
+
+	// Turning the proxy off switches the "Open" URL to the direct port.
+	res, m = doReq(t, "PATCH", env.base+"/api/cards/"+id, cookie, map[string]any{"proxy": false})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("patch proxy off = %d %v", res.StatusCode, m)
+	}
+	if m["disableProxy"] != true {
+		t.Fatalf("disableProxy = %v, want true", m["disableProxy"])
+	}
+	if m["url"] != "http://127.0.0.1:8000/" {
+		t.Fatalf("direct url = %v, want direct port", m["url"])
+	}
+	// Turning it back on restores the same-origin path.
+	res, m = doReq(t, "PATCH", env.base+"/api/cards/"+id, cookie, map[string]any{"proxy": true})
+	if res.StatusCode != http.StatusOK || m["url"] != "/emulator/" {
+		t.Fatalf("patch proxy on = %d %v", res.StatusCode, m)
+	}
+
+	res, _ = doReq(t, "POST", env.base+"/api/cards/"+id+"/stop", cookie, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("stop emulatorjs = %d", res.StatusCode)
+	}
+	res, _ = doReq(t, "DELETE", env.base+"/api/cards/"+id, cookie, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("delete emulatorjs = %d", res.StatusCode)
+	}
+}
+
+func TestEmulatorHiddenWithoutDirs(t *testing.T) {
+	env := newTestEnvFull(t, nil, func(s *api.Service) {
+		s.Config.EmulatorJS.Dirs = []string{}
+	})
+	cookie := loginCookie(t, env.base, testPassword)
+	res, m := doReq(t, "GET", env.base+"/api/meta", cookie, nil)
+	apps, _ := m["apps"].(map[string]any)
+	em, _ := apps["emulatorjs"].(map[string]any)
+	if em == nil || em["installed"] != false || em["reason"] != "add.reason.emulatorNoDirs" {
+		t.Fatalf("meta apps.emulatorjs without dirs = %v", apps)
+	}
+	res, m = doReq(t, "POST", env.base+"/api/cards", cookie, map[string]string{"kind": "emulatorjs"})
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("create emulatorjs without dirs = %d, want 400 (%v)", res.StatusCode, m)
+	}
+}
+
+// TestMdbookProxyToggle covers the per-card reverse-proxy switch for mdbook:
+// proxy on (default) returns the same-origin path, proxy off the direct URL.
+func TestMdbookProxyToggle(t *testing.T) {
+	root := t.TempDir()
+	booksDir := filepath.Join(root, "books")
+	bookDir := filepath.Join(booksDir, "guide")
+	env := newTestEnvFull(t, nil, func(s *api.Service) {
+		mdbookInstalled(s, booksDir, bookDir)
+	})
+	cookie := loginCookie(t, env.base, testPassword)
+	res, m := doReq(t, "POST", env.base+"/api/cards", cookie, map[string]any{"kind": "mdbook", "dir": bookDir})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("create mdbook = %d %v", res.StatusCode, m)
+	}
+	id := cardID(t, m)
+	res, m = doReq(t, "POST", env.base+"/api/cards/"+id+"/start", cookie, nil)
+	if res.StatusCode != http.StatusOK || m["url"] != "/mdbook/" {
+		t.Fatalf("mdbook default url = %d %v", res.StatusCode, m)
+	}
+	res, m = doReq(t, "PATCH", env.base+"/api/cards/"+id, cookie, map[string]any{"proxy": false})
+	if res.StatusCode != http.StatusOK || m["url"] != "http://127.0.0.1:8000/" {
+		t.Fatalf("mdbook direct url = %d %v", res.StatusCode, m)
+	}
+	// The toggle is ignored for kinds that are not proxy-capable.
+	res, m = doReq(t, "POST", env.base+"/api/cards", cookie, map[string]any{"kind": "wetty"})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("create wetty = %d", res.StatusCode)
+	}
+	wid := cardID(t, m)
+	res, m = doReq(t, "PATCH", env.base+"/api/cards/"+wid, cookie, map[string]any{"proxy": false})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("patch wetty proxy = %d", res.StatusCode)
+	}
+	if v, ok := m["disableProxy"]; ok && v == true {
+		t.Fatalf("wetty must not be proxy-capable: %v", m)
 	}
 }

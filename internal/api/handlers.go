@@ -28,8 +28,12 @@ type cardRequest struct {
 	Background string `json:"background"`
 	Kind       string `json:"kind"`
 	// Dir is the project directory for kinds that point at a project
-	// (mdbook); required when Kind is mdbook.
+	// (mdbook) or the ROM file (emulatorjs); required for both.
 	Dir string `json:"dir"`
+	// Proxy is the per-card reverse-proxy switch of the proxy-capable kinds
+	// (mdbook/emulatorjs/opencode). nil leaves it unchanged; true uses the
+	// same-origin proxy, false the app's direct URL.
+	Proxy *bool `json:"proxy"`
 }
 
 // HandleCreateCard validates the kind (the app must be installed and the
@@ -44,7 +48,7 @@ func (s *Service) HandleCreateCard(w http.ResponseWriter, r *http.Request) {
 	if kind == "" {
 		kind = store.KindComfyUI
 	}
-	if kind != store.KindComfyUI && kind != store.KindOpencode && kind != store.KindMdbook && kind != store.KindVSCode && kind != store.KindVSCodium && kind != store.KindWetty {
+	if kind != store.KindComfyUI && kind != store.KindOpencode && kind != store.KindMdbook && kind != store.KindVSCode && kind != store.KindVSCodium && kind != store.KindWetty && kind != store.KindEmulatorJS {
 		s.writeError(w, http.StatusBadRequest, "err.kindUnsupported", kind)
 		return
 	}
@@ -53,12 +57,21 @@ func (s *Service) HandleCreateCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dir := ""
-	if kind == store.KindMdbook {
+	switch kind {
+	case store.KindMdbook:
 		// The mdbook card must point at a recognized project under the
 		// configured directories; never an arbitrary path.
 		dir = filepath.Clean(req.Dir)
 		if !s.mdbookProjectDir(dir) {
 			s.writeError(w, http.StatusBadRequest, "err.mdbookNoProject")
+			return
+		}
+	case store.KindEmulatorJS:
+		// The emulatorjs card must point at a ROM recognized under the
+		// configured game directories; never an arbitrary path.
+		dir = filepath.Clean(req.Dir)
+		if !s.emulatorGamePath(dir) {
+			s.writeError(w, http.StatusBadRequest, "err.emulatorNoGame")
 			return
 		}
 	}
@@ -112,6 +125,11 @@ func (s *Service) HandlePatchCard(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Background != "" {
 		card.Background = req.Background
+	}
+	if req.Proxy != nil && proxyCapable(card.Kind) {
+		// A plain bool cannot distinguish "unset" from false, so the field
+		// is a pointer: only an explicit value flips the switch.
+		card.DisableProxy = !*req.Proxy
 	}
 	if err := s.save(); err != nil {
 		s.writeError(w, http.StatusInternalServerError, "err.saveFailed", err.Error())
@@ -294,6 +312,10 @@ func (s *Service) appInstalled(kind string) bool {
 		return s.VscodiumBin() != ""
 	case store.KindWetty:
 		return s.WettyBin() != ""
+	case store.KindEmulatorJS:
+		// EmulatorJS has no external CLI: the kind is available once at
+		// least one game directory is configured.
+		return len(s.Config.EmulatorJS.Dirs) > 0
 	}
 	return false
 }
@@ -309,6 +331,8 @@ func (s *Service) installDir(kind, cardDir string) string {
 			return dirs[0]
 		}
 	case store.KindMdbook:
+		return cardDir
+	case store.KindEmulatorJS:
 		return cardDir
 	case store.KindOpencode, store.KindVSCode, store.KindVSCodium, store.KindWetty:
 		if home, err := os.UserHomeDir(); err == nil {
@@ -332,6 +356,20 @@ func (s *Service) mdbookProjectDir(dir string) bool {
 	return false
 }
 
+// emulatorGamePath reports whether dir is one of the ROM files recognized
+// under the configured game directories.
+func (s *Service) emulatorGamePath(dir string) bool {
+	if dir == "" {
+		return false
+	}
+	for _, g := range s.EmulatorGames(s.Config.EmulatorJS.Dirs) {
+		if g.Path == dir {
+			return true
+		}
+	}
+	return false
+}
+
 // kindLabel is the default card name and display label for a kind.
 func kindLabel(kind string) string {
 	switch kind {
@@ -347,6 +385,8 @@ func kindLabel(kind string) string {
 		return "VSCodium"
 	case store.KindWetty:
 		return "WeTTY"
+	case store.KindEmulatorJS:
+		return "EmulatorJS"
 	}
 	return kind
 }
@@ -377,6 +417,8 @@ func defaultIcon(icon, kind string) string {
 			return "code"
 		case store.KindWetty:
 			return "terminal"
+		case store.KindEmulatorJS:
+			return "gamepad-2"
 		}
 	}
 	return icon

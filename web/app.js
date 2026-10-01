@@ -669,7 +669,8 @@ function detailRows(card) {
     rows.push(`<div class="detail-row"><span class="detail-label">${t("card.memoryLabel")}</span><span class="detail-value">${esc(fmtMem(card.memoryKB))}</span></div>`);
   }
   if (card.dir) {
-    rows.push(`<div class="detail-row"><span class="detail-label">${t("card.dirLabel")}</span><span class="detail-value"><code>${esc(card.dir)}</code></span></div>`);
+    const dirLabel = card.kind === "emulatorjs" ? t("card.gameLabel") : t("card.dirLabel");
+    rows.push(`<div class="detail-row"><span class="detail-label">${dirLabel}</span><span class="detail-value"><code>${esc(card.dir)}</code></span></div>`);
   }
   if (card.port) {
     rows.push(`<div class="detail-row"><span class="detail-label">${t("card.portLabel")}</span><span class="detail-value"><code>${esc(card.port)}</code></span></div>`);
@@ -791,12 +792,23 @@ function kindIcon(kind) {
     case "vscode": return "code";
     case "vscodium": return "code";
     case "wetty": return "terminal";
+    case "emulatorjs": return "gamepad-2";
     default: return "palette";
   }
 }
 
 // ALL_KINDS is the canonical order of the app types.
-const ALL_KINDS = ["comfyui", "opencode", "mdbook", "vscode", "vscodium", "wetty"];
+const ALL_KINDS = ["comfyui", "opencode", "mdbook", "vscode", "vscodium", "wetty", "emulatorjs"];
+
+// PROXY_KINDS are the kinds whose "Open" URL can be either the same-origin
+// narthex reverse proxy or the app's own direct URL; their card settings
+// show a reverse-proxy toggle.
+const PROXY_KINDS = ["mdbook", "emulatorjs", "opencode"];
+
+// isProxyKind reports whether a kind supports the reverse-proxy toggle.
+function isProxyKind(kind) {
+  return PROXY_KINDS.includes(kind);
+}
 
 // kindEntries returns every known kind with whether it can be added and,
 // when it cannot, the i18n key of the reason to show. A kind is
@@ -830,10 +842,10 @@ async function openAddModal() {
       </div>
     </div>
     <div id="step-project" hidden>
-      <div class="field-label">${t("modal.projectStep")}</div>
+      <div class="field-label" id="project-step-label">${t("modal.projectStep")}</div>
       <div class="kind-list" id="project-list"></div>
       <p id="project-empty" class="muted" hidden></p>
-      <div class="project-create">
+      <div class="project-create" id="project-create">
         <div class="field-label">${t("modal.createProject")}</div>
         <div class="project-create-row">
           <select id="project-parent" class="btn ghost lang-select"></select>
@@ -913,18 +925,20 @@ async function openAddModal() {
 
   nextBtn.addEventListener("click", () => {
     if (!chosenKind) return;
-    if (chosenKind === "mdbook") {
-      // mdBook cards point at a project: let the user pick an existing
-      // book or create a new one before the pickers step.
+    if (chosenKind === "mdbook" || chosenKind === "emulatorjs") {
+      // mdBook cards point at a book project and EmulatorJS cards at a ROM:
+      // let the user pick one (mdbook can also create a new book) before the
+      // pickers step.
       stepKind.hidden = true;
       stepProject.hidden = false;
-      loadProjects();
+      setupProjectStep();
+      loadProjectStep();
     } else {
       showPickers((meta.apps[chosenKind] || {}).label || chosenKind);
     }
   });
 
-  /* ---- mdbook project step ---- */
+  /* ---- mdbook project / emulatorjs game step ---- */
 
   const projectList = $("#project-list", modal);
   const projectEmpty = $("#project-empty", modal);
@@ -934,17 +948,30 @@ async function openAddModal() {
   const projectNext = $("#btn-project-next", modal);
   let projects = [];
 
+  // setupProjectStep adapts the shared step to the chosen kind: the mdBook
+  // flow can create a book, the EmulatorJS flow only picks a ROM.
+  function setupProjectStep() {
+    const isBook = chosenKind === "mdbook";
+    $("#project-step-label", modal).textContent = t(isBook ? "modal.projectStep" : "modal.gameStep");
+    $("#project-create", modal).hidden = !isBook;
+    projectEmpty.textContent = t(isBook ? "modal.projectEmpty" : "modal.gameEmpty");
+  }
+
   function renderProjects() {
+    const isBook = chosenKind === "mdbook";
     projectList.innerHTML = "";
     projectEmpty.hidden = projects.length > 0;
     for (const p of projects) {
       const item = document.createElement("button");
       item.type = "button";
       item.className = "kind-item";
+      const sub = isBook
+        ? `<div class="project-path">${esc(p.path)}</div>`
+        : `<div class="project-path">${esc(p.system)} · ${esc(p.core)} · ${esc(p.path)}</div>`;
       item.innerHTML = `
         <span>
           <div>${esc(p.name)}</div>
-          <div class="project-path">${esc(p.path)}</div>
+          ${sub}
         </span>`;
       item.addEventListener("click", () => {
         projectList.querySelectorAll(".kind-item").forEach((el) => el.classList.remove("selected"));
@@ -957,10 +984,11 @@ async function openAddModal() {
     }
   }
 
-  async function loadProjects() {
+  async function loadProjectStep() {
+    const isBook = chosenKind === "mdbook";
     try {
-      const data = await api("/api/mdbook/projects");
-      projects = data.projects || [];
+      const data = await api(isBook ? "/api/mdbook/projects" : "/api/emulator/games");
+      projects = (isBook ? data.projects : data.games) || [];
       projectParent.innerHTML = "";
       for (const d of data.dirs || []) {
         const opt = document.createElement("option");
@@ -977,6 +1005,7 @@ async function openAddModal() {
   }
 
   projectCreate.addEventListener("click", async () => {
+    if (chosenKind !== "mdbook") return;
     const name = projectName.value.trim();
     if (!name) {
       alert(t("modal.bookNameRequired"));
@@ -1028,7 +1057,7 @@ async function openAddModal() {
       icon: iconPicker.get(),
       background: bgPicker.get(),
     };
-    if (chosenKind === "mdbook") body.dir = chosenDir;
+    if (chosenKind === "mdbook" || chosenKind === "emulatorjs") body.dir = chosenDir;
     try {
       await api("/api/cards", {
         method: "POST",
@@ -1066,6 +1095,14 @@ async function openEditModal(card) {
       <input type="number" id="edit-gateway-port" min="1" max="65535" placeholder="4399" style="margin-top:6px">
       <div class="muted" id="edit-gateway-port-hint" style="font-size:12px;margin-top:4px">${t("modal.gatewayPortHint")}</div>
     </div>` : ""}
+    ${isProxyKind(card.kind) ? `
+    <div>
+      <div class="field-label">${t("modal.proxyLabel")}</div>
+      <label class="slogan-toggle">
+        <input type="checkbox" id="edit-proxy"> ${t("modal.proxyShow")}
+      </label>
+      <div class="muted" id="edit-proxy-hint" style="font-size:12px;margin-top:4px">${t("modal.proxyHint")}</div>
+    </div>` : ""}
     <div class="modal-actions">
       <button type="button" class="btn ghost" id="btn-cancel">${t("modal.cancel")}</button>
       <button type="button" class="btn primary" id="btn-save">${t("modal.save")}</button>
@@ -1080,6 +1117,11 @@ async function openEditModal(card) {
     if (card.running) {
       $("#edit-gateway-port-hint", modal).textContent = t("modal.gatewayPortRunningHint");
     }
+  }
+  const proxyInput = isProxyKind(card.kind) ? $("#edit-proxy", modal) : null;
+  if (proxyInput) {
+    // Missing/false disableProxy means the proxy is on by default.
+    proxyInput.checked = !card.disableProxy;
   }
 
   $("#btn-cancel", modal).addEventListener("click", closeModal);
@@ -1105,6 +1147,7 @@ async function openEditModal(card) {
           name: $("#edit-name", modal).value.trim(),
           icon: iconPicker.get(),
           background: bgPicker.get(),
+          ...(proxyInput ? { proxy: proxyInput.checked } : {}),
         }),
       });
       closeModal();
