@@ -1,23 +1,28 @@
 package procman
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"narthex/internal/store"
 )
 
-// startOpencode launches the opencode web server from the opencode CLI:
-// `opencode web --port <n> --hostname <host>`. The working directory dir
+// startOpencode launches the opencode web server from the opencode CLI.
+// opencode v2 removed the `web` subcommand and serves the web UI from
+// `opencode serve`; v1 still uses `opencode web`, so the invocation is
+// picked from the CLI version (see opencodeArgs). The working directory dir
 // is the project the server operates on. The server is secured with HTTP
 // basic auth via OPENCODE_SERVER_PASSWORD / OPENCODE_SERVER_USERNAME
 // (mandatory because the server binds a non-loopback address).
 //
-// `opencode web` opens a browser tab on the host at startup, which a
+// `opencode web` (v1) opens a browser tab on the host at startup, which a
 // managed card should not do (the "Open" button is the entry point). There
 // is no CLI flag to disable that, so the browser-opener (`open` on macOS,
 // `xdg-open` on Linux) is shadowed with a no-op on the child's PATH.
@@ -35,10 +40,47 @@ func (m *Manager) startOpencode(dir, id string, port int) (int, error) {
 		"OPENCODE_SERVER_USERNAME="+store.OpencodeUsername,
 	)
 	env = prependPath(env, noOpen)
-	cmd := exec.Command(bin, "web", "--port", strconv.Itoa(port), "--hostname", m.OpencodeHostname)
+	cmd := exec.Command(bin, opencodeArgs(bin, port, m.OpencodeHostname)...)
 	cmd.Dir = dir
 	cmd.Env = env
 	return m.spawn(cmd, id)
+}
+
+// versionRe matches the first major.minor version in CLI version output
+// (`opencode v2.0.25` → 2.0).
+var versionRe = regexp.MustCompile(`(\d+)\.\d+`)
+
+// opencodeArgs returns the arguments that start the opencode web server:
+// `serve --port <n> --hostname <host>` on opencode v2, `web --port <n>
+// --hostname <host>` on v1 (v2 removed the `web` subcommand).
+func opencodeArgs(bin string, port int, hostname string) []string {
+	sub := "web"
+	if opencodeMajor(bin) >= 2 {
+		sub = "serve"
+	}
+	return []string{sub, "--port", strconv.Itoa(port), "--hostname", hostname}
+}
+
+// opencodeMajor runs `opencode --version` and returns its major version, or
+// -1 when the CLI cannot be run or the output contains no version. The
+// probe is bounded so a hung CLI cannot block a card start; callers fall
+// back to the v1 (`web`) invocation when it fails.
+func opencodeMajor(bin string) int {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bin, "--version").Output()
+	if err != nil {
+		return -1
+	}
+	m := versionRe.FindStringSubmatch(string(out))
+	if m == nil {
+		return -1
+	}
+	major, err := strconv.Atoi(m[1])
+	if err != nil {
+		return -1
+	}
+	return major
 }
 
 // noOpenDir returns a directory holding no-op `open`/`xdg-open` scripts

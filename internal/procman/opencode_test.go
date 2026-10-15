@@ -4,22 +4,35 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
 
 // writeFakeOpencode creates a fake `opencode` CLI that mimics `opencode
-// web`: it serves HTTP on the port given via `--port`, mirroring the
-// web UI the real CLI hosts. When OC_ENV_FILE is set it also dumps the
+// serve`/`opencode web`: it answers `--version` (reporting v2, so the
+// manager picks the `serve` subcommand) and serves HTTP on the port given
+// via `--port`. When OC_ENV_FILE is set it also dumps the subcommand, the
 // basic-auth credentials and PATH so tests can assert the child env.
 func writeFakeOpencode(t *testing.T) string {
+	t.Helper()
+	return writeFakeOpencodeVersion(t, "opencode v2.0.25")
+}
+
+// writeFakeOpencodeVersion is writeFakeOpencode with a custom `--version`
+// output.
+func writeFakeOpencodeVersion(t *testing.T, version string) string {
 	t.Helper()
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "opencode")
 	shim := `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf '%s\n' '` + version + `'
+  exit 0
+fi
 if [ -n "$OC_ENV_FILE" ]; then
-  printf '%s|%s|%s\n' "$OPENCODE_SERVER_USERNAME" "$OPENCODE_SERVER_PASSWORD" "$PATH" > "$OC_ENV_FILE"
+  printf '%s|%s|%s|%s\n' "$1" "$OPENCODE_SERVER_USERNAME" "$OPENCODE_SERVER_PASSWORD" "$PATH" > "$OC_ENV_FILE"
 fi
 port=4300
 prev=
@@ -55,6 +68,51 @@ func TestDetectOpencode(t *testing.T) {
 	}
 }
 
+// writeVersionScript creates an executable shim that prints the given
+// string for any invocation (used as a fake CLI for version probing).
+func writeVersionScript(t *testing.T, output string, exitCode int) string {
+	t.Helper()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "opencode")
+	script := "#!/bin/sh\n"
+	if output != "" {
+		script += "printf '%s\\n' '" + output + "'\n"
+	}
+	script += "exit " + strconv.Itoa(exitCode) + "\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin
+}
+
+func TestOpencodeArgs(t *testing.T) {
+	cases := []struct {
+		name    string
+		version string
+		exit    int
+		want    string
+	}{
+		// opencode v2 removed `web`; the web UI is served by `serve`.
+		{"v2 uses serve", "opencode v2.0.25", 0, "serve"},
+		// opencode v1 still serves the web UI from `web`.
+		{"v1 keeps web", "1.18.21", 0, "web"},
+		// Unparseable or failing version probes keep the historical v1
+		// invocation instead of breaking v1 installs.
+		{"unparseable falls back to web", "not-a-version", 0, "web"},
+		{"failing probe falls back to web", "", 1, "web"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bin := writeVersionScript(t, tc.version, tc.exit)
+			got := opencodeArgs(bin, 4321, "0.0.0.0")
+			want := []string{tc.want, "--port", "4321", "--hostname", "0.0.0.0"}
+			if strings.Join(got, " ") != strings.Join(want, " ") {
+				t.Fatalf("opencodeArgs = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 func TestOpencodeLifecycle(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not available; needed for the opencode shim")
@@ -83,7 +141,8 @@ func TestOpencodeLifecycle(t *testing.T) {
 	}
 
 	// The child receives the basic-auth credentials and a PATH that has
-	// the no-open dir first (so `opencode web` never opens a browser).
+	// the no-open dir first (so `opencode web` never opens a browser); on
+	// a v2 CLI the manager probes the version and starts `serve`.
 	var raw []byte
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
 		if b, err := os.ReadFile(envFile); err == nil {
@@ -96,15 +155,18 @@ func TestOpencodeLifecycle(t *testing.T) {
 		t.Fatal("env dump missing")
 	}
 	parts := strings.Split(strings.TrimSpace(string(raw)), "|")
-	if len(parts) != 3 {
+	if len(parts) != 4 {
 		t.Fatalf("env dump = %q", raw)
 	}
-	if parts[0] != "opencode" || parts[1] != "secret-pass" {
-		t.Fatalf("credentials = %q %q", parts[0], parts[1])
+	if parts[0] != "serve" {
+		t.Fatalf("v2 CLI should start `opencode serve`, got %q", parts[0])
+	}
+	if parts[1] != "opencode" || parts[2] != "secret-pass" {
+		t.Fatalf("credentials = %q %q", parts[1], parts[2])
 	}
 	noOpen := filepath.Join(logDir, "no-open")
-	if !strings.HasPrefix(parts[2], noOpen+string(os.PathListSeparator)) {
-		t.Fatalf("PATH should start with the no-open dir: %q", parts[2])
+	if !strings.HasPrefix(parts[3], noOpen+string(os.PathListSeparator)) {
+		t.Fatalf("PATH should start with the no-open dir: %q", parts[3])
 	}
 	for _, name := range []string{"open", "xdg-open"} {
 		if _, err := os.Stat(filepath.Join(noOpen, name)); err != nil {

@@ -55,15 +55,20 @@ data = [{"installPath": install.rsplit("/ComfyUI", 1)[0], "status": "installed"}
 open(sys.argv[2] + "/installations.json", "w").write(json.dumps(data))
 PY
 
-# Fake `opencode` CLI: mimics `opencode web` by serving HTTP on the port
-# given via `--port`. When OC_ENV_FILE is set it also dumps the basic-auth
+# Fake `opencode` CLI: answers `--version` (v2) and mimics `opencode serve`
+# / `opencode web` by serving HTTP on the port given via `--port`. When
+# OC_ENV_FILE is set it also dumps the subcommand, the basic-auth
 # credentials and PATH so the test can assert the child env. Shadowed on
 # PATH so the real CLI is never touched.
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/opencode" <<'SHIM'
 #!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "opencode v2.0.25"
+  exit 0
+fi
 if [ -n "$OC_ENV_FILE" ]; then
-  printf '%s|%s|%s\n' "$OPENCODE_SERVER_USERNAME" "$OPENCODE_SERVER_PASSWORD" "$PATH" > "$OC_ENV_FILE"
+  printf '%s|%s|%s|%s\n' "$1" "$OPENCODE_SERVER_USERNAME" "$OPENCODE_SERVER_PASSWORD" "$PATH" > "$OC_ENV_FILE"
 fi
 port=4300
 prev=
@@ -369,12 +374,13 @@ for _ in $(seq 1 40); do
   sleep 0.5
 done
 [ "$RUN" = "yes" ] || { echo "$STATUS"; fail "opencode app did not become running"; }
-# The spawned opencode gets the credentials via env and a PATH that
-# shadows the browser opener (no browser tab is opened on the host).
+# The spawned opencode is started as `opencode serve` (v2; the fake CLI
+# reports v2), gets the credentials via env and a PATH that shadows the
+# browser opener (no browser tab is opened on the host).
 for _ in $(seq 1 20); do [ -s "$TMP/opencode-env.txt" ] && break; sleep 0.25; done
 [ -s "$TMP/opencode-env.txt" ] || fail "opencode env dump missing: $(cat "$TMP/opencode-env.txt" 2>/dev/null)"
 OC_ENV=$(cat "$TMP/opencode-env.txt")
-echo "$OC_ENV" | grep -q "^opencode|$OCOPENCODE_PW|" || fail "opencode child env wrong: $OC_ENV"
+echo "$OC_ENV" | grep -q "^serve|opencode|$OCOPENCODE_PW|" || fail "opencode child env wrong: $OC_ENV"
 echo "$OC_ENV" | grep -q "no-open" || fail "opencode child PATH should shadow the browser opener: $OC_ENV"
 echo "$STATUS" | python3 -c "import sys,json;c=[x for x in json.load(sys.stdin)['cards'] if x['id']=='$ID'][0];assert c['password'] and c['username']=='opencode',c"
 # The "Open" URL points at the narthex gateway (no embedded credentials);
