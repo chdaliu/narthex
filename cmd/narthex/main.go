@@ -27,7 +27,8 @@ import (
 	"narthex/internal/termios"
 )
 
-const version = "0.0.1"
+// var (not const) so release builds can inject the tag via -ldflags -X main.version=
+var version = "0.0.1"
 
 func main() {
 	if len(os.Args) < 2 {

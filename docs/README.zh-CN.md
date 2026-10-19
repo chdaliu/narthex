@@ -35,7 +35,17 @@
 - `emulatorjs` 卡片**无需外部二进制**:只需把 `emulatorjs.dirs` 设为一个或多个含 ROM 的目录(玩家资源默认来自 CDN,离线用 `emulatorjs.dataPath`)
 - macOS 或 Linux(内存读取:macOS 用 `ps`,Linux 用 `/proc/<pid>/status`)
 
-## 快速开始
+## 安装
+
+**Homebrew**(预编译二进制,无需 Go 工具链,`brew upgrade` 升级):
+
+```bash
+brew install lcd/tap/narthex      # 自动添加 lcd/tap tap
+```
+
+> Tap 仓库:[github.com/lcd/homebrew-tap](https://github.com/lcd/homebrew-tap);`Formula/narthex.rb` 的母本在本仓库 [Formula/](Formula/) 目录,每次发版后同步过去。`brew upgrade` 后需重跑一次 `narthex autostart install`——launchd 任务指向旧 Cellar 路径(见[开机自启](#开机自启))。
+
+**从源码构建**:
 
 ```bash
 make build            # 构建 build/narthex
