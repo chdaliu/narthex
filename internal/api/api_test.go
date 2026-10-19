@@ -51,12 +51,15 @@ type fakeBackend struct {
 	mem     int64
 	// urlPort is the port reported for running instances.
 	urlPort int
+	// lastHosts records the browser hosts of the most recent Start.
+	lastHosts []string
 }
 
-func (f *fakeBackend) Start(kind, dir, id string) (int, int, error) {
+func (f *fakeBackend) Start(kind, dir, id string, hosts []string) (int, int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.started = append(f.started, kind+"|"+dir+"|"+id)
+	f.lastHosts = hosts
 	f.alive = true
 	f.healthy = true
 	f.mem = 42000

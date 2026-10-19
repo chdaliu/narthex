@@ -138,9 +138,13 @@ exit 0
 SHIM
 chmod +x "$TMP/bin/codium"
 
-# Fake `wetty` CLI: serves HTTP on the port given via `--port`.
+# Fake `wetty` CLI: serves HTTP on the port given via `--port`, and records
+# its arguments so the card test can assert the origin allowlist.
 cat > "$TMP/bin/wetty" <<'SHIM'
 #!/bin/sh
+if [ -n "$NARTHEX_WETTY_ARGS_FILE" ]; then
+  printf '%s\n' "$*" > "$NARTHEX_WETTY_ARGS_FILE"
+fi
 port=4900
 prev=
 for a in "$@"; do
@@ -223,7 +227,7 @@ kill "$AUTO_PID" 2>/dev/null || true
 wait "$AUTO_PID" 2>/dev/null || true
 
 echo "== serve =="
-OC_ENV_FILE="$TMP/opencode-env.txt" PATH="$TMP/bin:$PATH" NARTHEX_COMFY_APP_DIR="$COMFYAPP" NARTHEX_COMFY_DESKTOP_DIR="$COMFYDESK" NARTHEX_MDBOOK_BIN="$TMP/bin/mdbook" NARTHEX_VSCODE_BIN="$TMP/bin/code" NARTHEX_VSCODIUM_BIN="$TMP/bin/codium" NARTHEX_WETTY_BIN="$TMP/bin/wetty" "$BIN" serve --config "$CFG" --port "$PORT" >"$TMP/server.log" 2>&1 &
+OC_ENV_FILE="$TMP/opencode-env.txt" PATH="$TMP/bin:$PATH" NARTHEX_COMFY_APP_DIR="$COMFYAPP" NARTHEX_COMFY_DESKTOP_DIR="$COMFYDESK" NARTHEX_MDBOOK_BIN="$TMP/bin/mdbook" NARTHEX_VSCODE_BIN="$TMP/bin/code" NARTHEX_VSCODIUM_BIN="$TMP/bin/codium" NARTHEX_WETTY_BIN="$TMP/bin/wetty" NARTHEX_WETTY_ARGS_FILE="$TMP/wetty-args.txt" "$BIN" serve --config "$CFG" --port "$PORT" >"$TMP/server.log" 2>&1 &
 SRV_PID=$!
 for _ in $(seq 1 40); do
   curl -fsS "http://127.0.0.1:$PORT/api/session" >/dev/null 2>&1 && break
@@ -540,6 +544,16 @@ import sys, json, re
 c = [x for x in json.load(sys.stdin)['cards'] if x['id'] == sys.argv[1]][0]
 m = re.search(r':(\d+)/', c['url'])
 assert m and 4900 <= int(m.group(1)) <= 5099, c" "$ID"
+WETTYARGS=$(cat "$TMP/wetty-args.txt") || fail "wetty args dump missing"
+PORTWETTY=$(python3 -c "import sys,re;m=re.search(r'--port (\d+)',sys.argv[1]);print(m.group(1) if m else '')" "$WETTYARGS")
+[ -n "$PORTWETTY" ] || fail "wetty args missing --port: $WETTYARGS"
+python3 - "$WETTYARGS" "$PORTWETTY" <<'PY'
+import sys
+args, port = sys.argv[1], sys.argv[2]
+assert f'--allowed-origin http://localhost:{port}' in args, args
+assert f'--allowed-origin http://127.0.0.1:{port}' in args, args
+assert args.count('--allowed-origin') == 2, args
+PY
 curl -fsS -b "$COOKIE" -X POST "http://127.0.0.1:$PORT/api/cards/$ID/stop" >/dev/null || fail "wetty stop failed"
 curl -fsS -b "$COOKIE" -X DELETE "http://127.0.0.1:$PORT/api/cards/$ID" >/dev/null || fail "wetty delete failed"
 

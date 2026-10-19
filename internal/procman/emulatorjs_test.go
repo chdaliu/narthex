@@ -126,7 +126,7 @@ func TestEmulatorLifecycle(t *testing.T) {
 		EmulatorCDNVersion: "stable",
 		LogDir:             logDir,
 	}
-	pid, port, err := m.Start("emulatorjs", rom, "emu1")
+	pid, port, err := m.Start("emulatorjs", rom, "emu1", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestEmulatorStartRejectsNonROM(t *testing.T) {
 	if err := os.WriteFile(txt, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := m.Start("emulatorjs", txt, "x"); err == nil {
+	if _, _, err := m.Start("emulatorjs", txt, "x", nil); err == nil {
 		t.Fatal("start with a non-ROM should error")
 	}
 }

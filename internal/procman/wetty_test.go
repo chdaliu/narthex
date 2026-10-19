@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -72,7 +73,7 @@ func TestWettyLifecycle(t *testing.T) {
 		LogDir:         logDir,
 	}
 
-	pid, port, err := m.Start("wetty", t.TempDir(), "wt1")
+	pid, port, err := m.Start("wetty", t.TempDir(), "wt1", []string{"192.168.1.20", "http://10.0.0.5:8080", "127.0.0.1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,10 +97,20 @@ func TestWettyLifecycle(t *testing.T) {
 		t.Fatal("child dump missing")
 	}
 	joined := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(raw)), "ARGS|"))
-	for _, want := range []string{"--port", "--host", "127.0.0.1", "--ssh-host", "localhost", "--ssh-port", "2222", "--ssh-user", "narthex"} {
+	for _, want := range []string{"--port", "--host", "127.0.0.1", "--ssh-host", "localhost", "--ssh-port", "2222", "--ssh-user", "narthex",
+		// WeTTY >= 4 trusted origins: loopback variants plus the browser
+		// hosts (schemes and dashboard ports stripped, deduplicated).
+		"--allowed-origin", "http://localhost:" + strconv.Itoa(port),
+		"http://127.0.0.1:" + strconv.Itoa(port),
+		"http://192.168.1.20:" + strconv.Itoa(port),
+		"http://10.0.0.5:" + strconv.Itoa(port),
+	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("child args %q missing %q", joined, want)
 		}
+	}
+	if strings.Count(joined, "--allowed-origin") != 4 {
+		t.Fatalf("child args %q should carry exactly 4 origins", joined)
 	}
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -133,7 +144,33 @@ func TestWettyStartError(t *testing.T) {
 		WettyPortRange: [2]int{4980, 4999},
 		LogDir:         t.TempDir(),
 	}
-	if _, _, err := m.Start("wetty", t.TempDir(), "x"); err == nil {
+	if _, _, err := m.Start("wetty", t.TempDir(), "x", nil); err == nil {
 		t.Fatal("start without a wetty binary should error")
+	}
+}
+
+func TestWettyOrigins(t *testing.T) {
+	got := wettyOrigins(4900, []string{
+		"localhost",
+		"http://10.0.0.5:8080/",
+		"QNAP.local",
+		"[::1]",
+		"127.0.0.1:5000",
+		"",
+	})
+	want := []string{
+		"http://localhost:4900",
+		"http://127.0.0.1:4900",
+		"http://10.0.0.5:4900",
+		"http://QNAP.local:4900",
+		"http://[::1]:4900",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("origins = %v, want %v", got, want)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Fatalf("origins = %v, want %v", got, want)
+		}
 	}
 }

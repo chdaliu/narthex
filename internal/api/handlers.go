@@ -231,7 +231,7 @@ func (s *Service) HandleStartCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dir := s.installDir(card.Kind, card.Dir)
-	pid, port, err := s.Backend.Start(card.Kind, dir, card.ID)
+	pid, port, err := s.Backend.Start(card.Kind, dir, card.ID, s.browserHosts(r.Host))
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "err.startFailed", err.Error())
 		return

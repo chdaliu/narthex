@@ -111,7 +111,7 @@ func New(hostname string, portRange [2]int, logDir string) *Manager {
 // opencode web server is spawned with dir as its working directory. The
 // child runs in its own process group so Stop can terminate the whole
 // tree. Output is appended to <LogDir>/<id>.log.
-func (m *Manager) Start(kind, dir, id string) (pid int, port int, err error) {
+func (m *Manager) Start(kind, dir, id string, hosts []string) (pid int, port int, err error) {
 	switch kind {
 	case store.KindComfyUI:
 		port, err = m.FreePort()
@@ -148,7 +148,7 @@ func (m *Manager) Start(kind, dir, id string) (pid int, port int, err error) {
 		if err != nil {
 			return 0, 0, err
 		}
-		pid, err = m.startWetty(dir, id, port)
+		pid, err = m.startWetty(dir, id, port, hosts)
 	case store.KindEmulatorJS:
 		port, err = freePortIn(m.EmulatorPortRange)
 		if err != nil {

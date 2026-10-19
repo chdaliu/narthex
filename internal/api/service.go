@@ -377,6 +377,36 @@ func (s *Service) baseURL(reqHost, kind string, port int) string {
 	return fmt.Sprintf("http://%s:%d/", s.instanceHost(reqHost, kind), port)
 }
 
+// browserHosts lists the browser-side hosts a directly-opened card (one
+// that serves its own page, e.g. WeTTY) may be reached from: the request
+// host (without the dashboard port) and, when configured, the internal
+// networking address. Servers with origin checks (WeTTY >= 4) derive their
+// trusted origins from it; the loopback variants are added by the backend.
+func (s *Service) browserHosts(reqHost string) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(host string) {
+		if host = strings.Trim(strings.TrimSpace(host), "[]"); host == "" {
+			return
+		}
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = strings.Trim(h, "[]")
+		}
+		if !seen[host] {
+			seen[host] = true
+			out = append(out, host)
+		}
+	}
+	add(reqHost)
+	if addr := strings.TrimSpace(s.Config.InternalAddress); addr != "" {
+		addr = strings.TrimPrefix(addr, "http://")
+		addr = strings.TrimPrefix(addr, "https://")
+		addr = strings.TrimSuffix(addr, "/")
+		add(addr)
+	}
+	return out
+}
+
 // codeToken returns the connection token of the VS Code-family kinds. It
 // is embedded in the "Open" URL so the browser sets the auth cookie on
 // first load (the server redirects to / and answers 200 afterwards).

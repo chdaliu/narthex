@@ -135,7 +135,7 @@ func TestVSCodeFamilyLifecycle(t *testing.T) {
 				m.VscodiumMachineSettingsFile = tc.settingsFile
 			}
 
-			pid, port, err := m.Start(tc.kind, t.TempDir(), "vc1")
+			pid, port, err := m.Start(tc.kind, t.TempDir(), "vc1", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -274,7 +274,7 @@ func TestVSCodeFamilyStartError(t *testing.T) {
 		m := &Manager{
 			LogDir: t.TempDir(),
 		}
-		if _, _, err := m.Start(tc.kind, t.TempDir(), "x"); err == nil {
+		if _, _, err := m.Start(tc.kind, t.TempDir(), "x", nil); err == nil {
 			t.Fatalf("start %s without a binary should error", tc.kind)
 		}
 	}
