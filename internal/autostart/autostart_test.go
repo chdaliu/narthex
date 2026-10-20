@@ -370,8 +370,8 @@ func TestBrewManaged(t *testing.T) {
 	withFakes(t, f)
 
 	paths := brewPlistPaths()
-	if len(paths) != 2 {
-		t.Fatalf("brew plist paths = %v, want 2 (user + root scope)", paths)
+	if len(paths) != 6 {
+		t.Fatalf("brew plist paths = %v, want 6 (3 label spellings × user + root scope)", paths)
 	}
 
 	// Nothing installed.
@@ -379,15 +379,22 @@ func TestBrewManaged(t *testing.T) {
 		t.Error("expected false with no brew plist present")
 	}
 
-	// User LaunchAgents scope (default `brew services start`).
+	// Current brew 7 user LaunchAgents label.
+	f.files[paths[2]] = []byte("placeholder")
+	if !BrewManaged() {
+		t.Error("expected true with the sh.brew user plist present")
+	}
+	delete(f.files, paths[2])
+
+	// Legacy homebrew.mxcl user label.
 	f.files[paths[0]] = []byte("placeholder")
 	if !BrewManaged() {
-		t.Error("expected true with the user LaunchAgents plist present")
+		t.Error("expected true with the legacy user plist present")
 	}
 	delete(f.files, paths[0])
 
 	// Root LaunchDaemons scope (`sudo brew services start`).
-	f.files[paths[1]] = []byte("placeholder")
+	f.files[paths[3]] = []byte("placeholder")
 	if !BrewManaged() {
 		t.Error("expected true with the LaunchDaemons plist present")
 	}

@@ -70,15 +70,29 @@ func PlistPath(spec Spec) (string, error) {
 // narthex formula (homebrew.mxcl.<formula name>).
 const BrewServiceLabel = "homebrew.mxcl.narthex"
 
+// brewServiceLabels lists every launchd label spelling `brew services`
+// has used for a formula. brew 7 migrated the prefix to sh.brew; the
+// legacy homebrew.mxcl and homebrew forms still appear on older installs.
+var brewServiceLabels = []string{
+	BrewServiceLabel,
+	"homebrew.narthex",
+	"sh.brew.narthex",
+}
+
 // brewPlistPaths returns where `brew services` installs the narthex job:
 // the user LaunchAgents scope (default) first, then the root LaunchDaemons
-// scope (`sudo brew services`).
+// scope (`sudo brew services`), for every label spelling.
 func brewPlistPaths() []string {
 	paths := []string{}
 	if home, err := os.UserHomeDir(); err == nil {
-		paths = append(paths, filepath.Join(home, "Library", "LaunchAgents", BrewServiceLabel+".plist"))
+		for _, label := range brewServiceLabels {
+			paths = append(paths, filepath.Join(home, "Library", "LaunchAgents", label+".plist"))
+		}
 	}
-	return append(paths, filepath.Join("/Library", "LaunchDaemons", BrewServiceLabel+".plist"))
+	for _, label := range brewServiceLabels {
+		paths = append(paths, filepath.Join("/Library", "LaunchDaemons", label+".plist"))
+	}
+	return paths
 }
 
 // BrewManaged reports whether a `brew services` job for narthex is
