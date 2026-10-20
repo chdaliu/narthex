@@ -42,6 +42,10 @@ class Narthex < Formula
     keep_alive true
   end
 
+  def install
+    bin.install "narthex"
+  end
+
   def caveats
     <<~EOS
       First run creates the config and prints a random password:
