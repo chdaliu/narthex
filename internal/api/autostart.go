@@ -11,17 +11,20 @@ import (
 
 // autostartResponse is the JSON shape returned by /api/autostart. The
 // supported flag is false on non-macOS hosts so the UI can render a
-// disabled toggle with a hint instead of an error.
+// disabled toggle with a hint instead of an error. brewManaged marks a
+// `brew services` job for narthex, which takes precedence over the
+// built-in autostart.
 type autostartResponse struct {
-	Supported bool   `json:"supported"`
-	Installed bool   `json:"installed"`
-	Loaded    bool   `json:"loaded"`
-	Label     string `json:"label"`
-	PlistPath string `json:"plistPath"`
+	Supported   bool   `json:"supported"`
+	Installed   bool   `json:"installed"`
+	Loaded      bool   `json:"loaded"`
+	BrewManaged bool   `json:"brewManaged"`
+	Label       string `json:"label"`
+	PlistPath   string `json:"plistPath"`
 }
 
-func autostartResp(st autostart.InstallStatus, err error) autostartResponse {
-	resp := autostartResponse{}
+func autostartResp(st autostart.InstallStatus, err error, brewManaged bool) autostartResponse {
+	resp := autostartResponse{BrewManaged: brewManaged}
 	if err != nil {
 		resp.Supported = !errors.Is(err, autostart.ErrUnsupportedOS)
 		return resp
@@ -44,7 +47,7 @@ func (s *Service) HandleAutostart(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == http.MethodGet {
 		st, err := autostart.Status(spec)
-		WriteJSON(w, http.StatusOK, autostartResp(st, err))
+		WriteJSON(w, http.StatusOK, autostartResp(st, err, s.BrewManaged()))
 		return
 	}
 
@@ -57,19 +60,27 @@ func (s *Service) HandleAutostart(w http.ResponseWriter, r *http.Request) {
 	}
 	switch req.Action {
 	case "install":
+		// While a brew services job is installed, ours would double-start
+		// serve at login — refuse and let the UI surface the reason.
+		if s.BrewManaged() {
+			s.writeError(w, http.StatusConflict, "err.autostartBrewManaged")
+			return
+		}
 		st, err := autostart.Install(spec)
 		if err != nil {
 			s.autostartWriteErr(w, err)
 			return
 		}
-		WriteJSON(w, http.StatusOK, autostartResp(st, err))
+		WriteJSON(w, http.StatusOK, autostartResp(st, err, s.BrewManaged()))
 	case "uninstall":
+		// Uninstall stays allowed under brew management so a previously
+		// installed built-in job can be cleaned up.
 		st, err := autostart.Uninstall(spec)
 		if err != nil {
 			s.autostartWriteErr(w, err)
 			return
 		}
-		WriteJSON(w, http.StatusOK, autostartResp(st, err))
+		WriteJSON(w, http.StatusOK, autostartResp(st, err, s.BrewManaged()))
 	default:
 		s.writeError(w, http.StatusBadRequest, "err.autostartUnknownAction", req.Action)
 	}

@@ -505,6 +505,11 @@ autostart 參數:
 		ZHCN: "自启仅支持 macOS",
 		ZHTW: "自啟僅支援 macOS",
 	},
+	"err.autostartBrewManaged": {
+		EN:   "narthex is managed by Homebrew services; run `brew services stop narthex` before installing the built-in autostart",
+		ZHCN: "narthex 正由 Homebrew services 管理;请先运行 `brew services stop narthex`,再安装内置自启",
+		ZHTW: "narthex 正由 Homebrew services 管理;請先執行 `brew services stop narthex`,再安裝內建自啟",
+	},
 	"err.restartUnsupported": {
 		EN:   "restart is not available on this host",
 		ZHCN: "此主机不支持重启",

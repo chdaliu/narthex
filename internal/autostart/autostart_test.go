@@ -364,6 +364,35 @@ func TestRestart(t *testing.T) {
 	}
 }
 
+func TestBrewManaged(t *testing.T) {
+	withDarwin(t)
+	f := &fakes{}
+	withFakes(t, f)
+
+	paths := brewPlistPaths()
+	if len(paths) != 2 {
+		t.Fatalf("brew plist paths = %v, want 2 (user + root scope)", paths)
+	}
+
+	// Nothing installed.
+	if BrewManaged() {
+		t.Error("expected false with no brew plist present")
+	}
+
+	// User LaunchAgents scope (default `brew services start`).
+	f.files[paths[0]] = []byte("placeholder")
+	if !BrewManaged() {
+		t.Error("expected true with the user LaunchAgents plist present")
+	}
+	delete(f.files, paths[0])
+
+	// Root LaunchDaemons scope (`sudo brew services start`).
+	f.files[paths[1]] = []byte("placeholder")
+	if !BrewManaged() {
+		t.Error("expected true with the LaunchDaemons plist present")
+	}
+}
+
 func TestRestartRejectsNonDarwin(t *testing.T) {
 	if fnIsDarwin() {
 		t.Skip("only runs on non-darwin")

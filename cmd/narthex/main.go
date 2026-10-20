@@ -422,6 +422,10 @@ func cmdAutostart(args []string) error {
 		if _, statErr := os.Stat(*configPath); statErr != nil {
 			return fmt.Errorf(L("err.autostartMissingConfig"), *configPath)
 		}
+		// A brew services job would double-start serve alongside ours.
+		if autostart.BrewManaged() {
+			return fmt.Errorf("%s", L("err.autostartBrewManaged"))
+		}
 	}
 
 	switch action {

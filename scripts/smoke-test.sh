@@ -669,8 +669,9 @@ curl -fsS -b "$COOKIE" "http://127.0.0.1:$PORT/api/autostart" | python3 -c '
 import sys, json
 r = json.load(sys.stdin)
 assert "supported" in r and isinstance(r["supported"], bool), r
+assert "brewManaged" in r and isinstance(r["brewManaged"], bool), r
 assert r["label"] == "com.narthex.serve", r
-print("  supported=%s installed=%s" % (r["supported"], r["installed"]))'
+print("  supported=%s installed=%s brewManaged=%s" % (r["supported"], r["installed"], r["brewManaged"]))'
 code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/autostart")
 [ "$code" = "401" ] || fail "expected 401 for unauthed autostart GET, got $code"
 code=$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" -H 'Content-Type: application/json' \

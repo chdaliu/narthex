@@ -1515,6 +1515,31 @@ func TestAutostartAPI(t *testing.T) {
 			t.Fatalf("invalid JSON = %d, want 400", res.StatusCode)
 		}
 	})
+
+	t.Run("brew managed: GET reports flag, install refused", func(t *testing.T) {
+		brewEnv := newTestEnvFull(t, nil, func(s *api.Service) {
+			s.BrewManaged = func() bool { return true }
+		})
+		brewCookie := loginCookie(t, brewEnv.base, testPassword)
+		res, m := doReq(t, "GET", brewEnv.base+"/api/autostart", brewCookie, nil)
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d", res.StatusCode)
+		}
+		if managed, _ := m["brewManaged"].(bool); !managed {
+			t.Errorf("expected brewManaged=true, got %v", m)
+		}
+		// Install is refused with a reason while brew manages the process.
+		// (Uninstall stays allowed for cleaning up a redundant built-in
+		// job; it is not asserted here because the HTTP handler would run
+		// the real launchctl/os.Remove path against this machine.)
+		res, m = doReq(t, "POST", brewEnv.base+"/api/autostart", brewCookie, map[string]string{"action": "install"})
+		if res.StatusCode != http.StatusConflict {
+			t.Errorf("install under brew management = %d, want 409", res.StatusCode)
+		}
+		if msg, _ := m["error"].(string); msg == "" {
+			t.Errorf("expected an error reason, got %v", m)
+		}
+	})
 }
 
 func TestSessionBootID(t *testing.T) {

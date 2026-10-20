@@ -1409,6 +1409,12 @@ function buildSettingsModal() {
         autoHint.textContent = t("modal.autostartUnsupported");
         return;
       }
+      if (st.brewManaged) {
+        autoOn.disabled = true;
+        autoOn.checked = false;
+        autoHint.textContent = t("modal.autostartManagedByBrew");
+        return;
+      }
       autoOn.disabled = false;
       autoOn.checked = !!st.installed;
     } catch (e) {

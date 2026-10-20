@@ -51,12 +51,12 @@ internal/store   原子写 JSON:config.json / state.json
 | `internal/api/mdbook.go` | `HandleMdbookProjects`(GET:配置目录 + 识别到的书籍)与 `HandleMdbookCreate`(POST:在配置目录下执行 `mdbook init`,含名称/存在性校验) |
 | `internal/api/emulator.go` | `HandleEmulatorGames`(GET `/api/emulator/games`:配置目录 + 识别到的 ROM,含 core/system) |
 | `internal/api/uploads.go` | 背景图上传/删除/枚举、扩展名白名单、上传静态目录 |
-| `internal/api/autostart.go` | `HandleAutostart`:GET(状态)/ POST(install/uninstall)用户级 serve launchd 任务 |
+| `internal/api/autostart.go` | `HandleAutostart`:GET(状态)/ POST(install/uninstall)用户级 serve launchd 任务;状态响应带 `brewManaged`(已安装 narthex 的 `brew services` 任务),此时 POST install 返回 409(`err.autostartBrewManaged`)、前端禁用开关——uninstall 保留可用于清理 |
 | `internal/api/json.go` | JSON 读写辅助;所有 API 响应都带 `Cache-Control: no-store`,避免鉴权状态被缓存重放 |
 | `internal/auth/password.go` | argon2id 哈希/校验、随机密码生成 |
 | `internal/auth/session.go` | HMAC-SHA256 无状态会话(Sign/Verify;TTL 由配置决定) |
 | `internal/auth/ratelimit.go` | 内存固定窗口限速(含 Reset) |
-| `internal/autostart/autostart.go` | macOS launchd 安装/卸载/查询/重启(用户级 serve);纯函数 `Label`/`PlistPath`/`Render` 加副作用 `Install`/`Uninstall`/`Status`/`Restart`(`launchctl kickstart -k`),通过包级函数变量接缝(`fnBootstrap`/`fnKickstart` 等)便于测试;非 darwin 返回 `ErrUnsupportedOS` |
+| `internal/autostart/autostart.go` | macOS launchd 安装/卸载/查询/重启(用户级 serve);纯函数 `Label`/`PlistPath`/`Render` 加副作用 `Install`/`Uninstall`/`Status`/`Restart`(`launchctl kickstart -k`),通过包级函数变量接缝(`fnBootstrap`/`fnKickstart` 等)便于测试;非 darwin 返回 `ErrUnsupportedOS`;`BrewManaged` 检测已安装的 `brew services` 任务(`homebrew.mxcl.narthex` plist,查用户 LaunchAgents 与根 LaunchDaemons 两个作用域——用 plist 存在性而非进程溯源,因为要防的冲突是「已启用」状态) |
 | `internal/restart/restart.go` | `Self()`:解析 `os.Executable()`(`EvalSymlinks`+`Abs`)后以保留 argv/env 的 `syscall.Exec` 原地重执行(非 launchd 场景的回退);`execve` 为测试接缝 |
 | `internal/i18n/i18n.go` | CLI/API 消息目录(en / zh-CN / zh-TW),`T(lang, key)` 翻译 + en 回退 |
 | `internal/procman/backend.go` | `Backend` 接口(`Start(kind, dir, id)`/`Stop`/`Status(kind, pid, port)`)与 `Status` 结构(进程操作唯一出口) |
@@ -83,7 +83,7 @@ internal/store   原子写 JSON:config.json / state.json
 | `web/assets/icons/*.svg` | 38 个 Lucide 图标(ISC) |
 | `web/assets/backgrounds/*.jpg` | 8 张背景图(picsum/Unsplash) |
 | `scripts/download-assets.sh` | 下载素材(已提交仓库,构建离线可用) |
-| `scripts/smoke-test.sh` | 端到端冒烟:local 全流程(含首次运行无配置自动 setup) + passwd/账号会话轮转 + comfyui/opencode/mdbook/vscode/vscodium/wetty/emulatorjs 卡片生命周期 + mdbook projects & emulator games API + 反向代理开关 + autostart 状态/错误路径(用假的 .app bundle 与假 `opencode`/`mdbook`/`code`/`codium`/`wetty`,不触碰真实应用) |
+| `scripts/smoke-test.sh` | 端到端冒烟:local 全流程(含首次运行无配置自动 setup) + passwd/账号会话轮转 + comfyui/opencode/mdbook/vscode/vscodium/wetty/emulatorjs 卡片生命周期 + mdbook projects & emulator games API + 反向代理开关 + autostart 状态/错误路径含 `brewManaged` 标志(用假的 .app bundle 与假 `opencode`/`mdbook`/`code`/`codium`/`wetty`,不触碰真实应用) |
 
 ## 4. 环境要求
 
@@ -109,7 +109,7 @@ serve 启动时打印 `detected apps: ...`,只有检测到的应用才能在界�
 
 1. `gofmt -l .` 无输出
 2. `go vet ./...` 无警告
-3. `go test ./...` 全过:auth(哈希/会话/限速)、secretbox(加密往返/错误密钥/篡改/随机 nonce)、i18n(三语 key 完整性)、procman(桌面应用生命周期/进程扫描兜底/健康检查/内存/`.app` 检测/opencode 启停与报错/mdbook 检测·项目扫描·init/vscode·vscodium 检测与生命周期(含 `--server-data-dir` 与 Machine 设置补齐)/wetty 检测与生命周期/emulatorjs ROM 扫描·核心映射·生命周期)、emulatorserver(CDN/本地 data 玩家页、ROM 提供、`/data/` 挂载)、store(默认值/规范化/`ExpandPath`/原子写往返/按 kind 去重)、gateway(opencode 注入·重定向,mdbook+emulatorjs 代理的重定向/停用页/前缀剥离,server 生命周期)、autostart(plist 渲染/路径解析/install/uninstall/status/restart 经 fakes,不真调 launchctl)、restart(`Self` 经 `execve` 接缝断言解析后的路径与 argv/env 透传)、api(fake Backend 全接口集成:鉴权/CRUD/生命周期/限速/meta(含 apps 与不可添加原因码)/语言切换/会话 TTL/账号修改/kind 校验与去重/应用未安装拒绝/内部组网地址 URL 替换/mdbook 卡片与 projects 端点/emulatorjs 卡片与 games 端点及反向代理开关/vscode·vscodium 令牌展示/wetty 卡片/会话 `bootId`/`POST /api/restart` 鉴权·501·调度调用)
+3. `go test ./...` 全过:auth(哈希/会话/限速)、secretbox(加密往返/错误密钥/篡改/随机 nonce)、i18n(三语 key 完整性)、procman(桌面应用生命周期/进程扫描兜底/健康检查/内存/`.app` 检测/opencode 启停与报错/mdbook 检测·项目扫描·init/vscode·vscodium 检测与生命周期(含 `--server-data-dir` 与 Machine 设置补齐)/wetty 检测与生命周期/emulatorjs ROM 扫描·核心映射·生命周期)、emulatorserver(CDN/本地 data 玩家页、ROM 提供、`/data/` 挂载)、store(默认值/规范化/`ExpandPath`/原子写往返/按 kind 去重)、gateway(opencode 注入·重定向,mdbook+emulatorjs 代理的重定向/停用页/前缀剥离,server 生命周期)、autostart(plist 渲染/路径解析/install/uninstall/status/restart 经 fakes,不真调 launchctl;`BrewManaged` 检测用户 LaunchAgents 与根 LaunchDaemons 作用域的 brew plist)、restart(`Self` 经 `execve` 接缝断言解析后的路径与 argv/env 透传)、api(fake Backend 全接口集成:鉴权/CRUD/生命周期/限速/meta(含 apps 与不可添加原因码)/语言切换/会话 TTL/账号修改/kind 校验与去重/应用未安装拒绝/内部组网地址 URL 替换/mdbook 卡片与 projects 端点/emulatorjs 卡片与 games 端点及反向代理开关/vscode·vscodium 令牌展示/wetty 卡片/会话 `bootId`/`POST /api/restart` 鉴权·501·调度调用)
 4. `make smoke` 输出 `SMOKE OK`(local 全流程(含首次运行无配置自动 setup) → **passwd 会话轮转**(旧 Cookie 401、新密码登录)→ **账号修改**(改用户名、旧会话 401、新用户名登录、旧用户名 401)→ **comfyui 卡片**(假 `Comfy Desktop.app` + `NARTHEX_COMFY_APP_DIR`,建卡/启动/URL 8000/停止/删除,重复 kind 409)→ **opencode 卡片**(假 `opencode` CLI + PATH 注入,建卡/启动/健康/停止/删除、密码生成并持久化、「打开」URL 指向网关(未认证 302、认证后代理 200)、直连 `apiUrl` 可访问、停止后网关仍保持监听:未认证 302 / 认证后 503 本地化停用页并含面板链接)→ **mdbook projects API + 卡片**(假 `mdbook` CLI + `mdbook.dirs`,列出/新建书籍,卡片启动/健康/停止/删除,同源 `/mdbook/` 代理:未认证 302、认证后 200)→ **vscode 卡片**(假 `code` CLI,建卡/启动/健康/停止/删除、令牌生成并持久化、`--server-data-dir` 目录已创建)→ **vscodium 卡片**(假 `codium` CLI,建卡/启动/健康/停止/删除、独立令牌生成并持久化、`--server-data-dir` 目录已创建、Machine 设置补齐且保留已有键)→ **wetty 卡片**(假 `wetty` CLI,建卡/启动/健康/停止/删除、无凭据)→ **emulatorjs games API + 卡片**(真实临时 ROM + `emulatorjs.dirs`,列出游戏,建卡/启动/健康/停止/删除,同源 `/emulator/` 代理:未认证 302 / 认证后玩家页 HTML+ROM,反向代理开关切到直连端口再切回,停止后 503 停用页)→ **autostart CLI**(status / 缺少操作 / 未知操作 / 缺少配置 错误路径,不实际 launchctl load)→ **restart 鉴权**(未认证 POST `/api/restart` 401,不触发重启))
 5. 前端改动需人工验证:登录页、卡片增删改、启动/停止、添加弹窗只列「已安装且未添加」的 kind、登录页与仪表盘共用同一背景(预设与上传图、已缓存)、opencode 网关免弹框打开、opencode 卡片「API」行、≤768px 移动端布局
 

@@ -33,20 +33,25 @@ class Narthex < Formula
     end
   end
 
-  # No `service` block: narthex installs its own launchd job via
-  # `narthex autostart install` (with a UI toggle); a brew service would
-  # double-start serve.
-  def install
-    bin.install "narthex"
+  # The service block makes `brew services start narthex` available as an
+  # alternative to the built-in `narthex autostart install` launchd job.
+  # narthex detects the brew job (homebrew.mxcl.narthex plist) and disables
+  # its own toggle, so the two mechanisms never double-start serve.
+  service do
+    run [opt_bin/"narthex", "serve"]
+    keep_alive true
   end
 
   def caveats
     <<~EOS
       First run creates the config and prints a random password:
         narthex serve
-      Auto-start at login:
+      Auto-start at login — pick ONE:
         narthex autostart install
-      After a `brew upgrade`, re-run `narthex autostart install`
+        brew services start narthex
+      The dashboard's start-at-login toggle disables itself while the
+      brew service is active. After a `brew upgrade`, re-run
+      `narthex autostart install` if you use the built-in job
       (the launchd job points at the old Cellar path).
     EOS
   end

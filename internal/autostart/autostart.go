@@ -66,6 +66,37 @@ func PlistPath(spec Spec) (string, error) {
 	return filepath.Join(home, "Library", "LaunchAgents", name), nil
 }
 
+// BrewServiceLabel is the launchd label `brew services` uses for the
+// narthex formula (homebrew.mxcl.<formula name>).
+const BrewServiceLabel = "homebrew.mxcl.narthex"
+
+// brewPlistPaths returns where `brew services` installs the narthex job:
+// the user LaunchAgents scope (default) first, then the root LaunchDaemons
+// scope (`sudo brew services`).
+func brewPlistPaths() []string {
+	paths := []string{}
+	if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths, filepath.Join(home, "Library", "LaunchAgents", BrewServiceLabel+".plist"))
+	}
+	return append(paths, filepath.Join("/Library", "LaunchDaemons", BrewServiceLabel+".plist"))
+}
+
+// BrewManaged reports whether a `brew services` job for narthex is
+// installed (either scope). The built-in autostart must yield while brew
+// manages the process: a second launchd job would double-start serve at
+// login. macOS only — elsewhere brew's service files are not plists.
+func BrewManaged() bool {
+	if !fnIsDarwin() {
+		return false
+	}
+	for _, p := range brewPlistPaths() {
+		if _, err := fnStat(p); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // logPath resolves the StandardOut/StandardError path: spec.LogPath if
 // set, otherwise <config dir>/<kind>.log.
 func logPath(spec Spec) string {

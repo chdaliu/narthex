@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"narthex/internal/auth"
+	"narthex/internal/autostart"
 	"narthex/internal/gateway"
 	"narthex/internal/i18n"
 	"narthex/internal/procman"
@@ -69,6 +70,9 @@ type Service struct {
 	// directories. Defaults to procman.DetectEmulatorGames; overridable in
 	// tests.
 	EmulatorGames func(dirs []string) []procman.EmulatorGame
+	// BrewManaged reports whether a `brew services` job for narthex is
+	// installed. Defaults to autostart.BrewManaged; overridable in tests.
+	BrewManaged func() bool
 	// Username is the decrypted login username (plaintext in memory only).
 	Username string
 	// Restart restarts the narthex process (re-exec or launchd kickstart).
@@ -119,6 +123,7 @@ func NewService(dir string, cfg *store.Config, state *store.State, backend procm
 		VscodiumBin:   procman.DetectVSCodium,
 		WettyBin:      procman.DetectWetty,
 		EmulatorGames: procman.DetectEmulatorGames,
+		BrewManaged:   autostart.BrewManaged,
 		Username:      username,
 		RestartDelay:  500 * time.Millisecond,
 		BootID:        store.RandomID(8),
