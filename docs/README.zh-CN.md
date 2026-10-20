@@ -40,10 +40,10 @@
 **Homebrew**(预编译二进制,无需 Go 工具链,`brew upgrade` 升级):
 
 ```bash
-brew install lcd/tap/narthex      # 自动添加 lcd/tap tap
+brew install chdaliu/tap/narthex  # 自动添加 chdaliu/tap tap
 ```
 
-> Tap 仓库:[github.com/lcd/homebrew-tap](https://github.com/lcd/homebrew-tap);`Formula/narthex.rb` 的母本在本仓库 [Formula/](Formula/) 目录,每次发版后同步过去。`brew upgrade` 后需重跑一次 `narthex autostart install`——launchd 任务指向旧 Cellar 路径(见[开机自启](#开机自启))。
+> Tap 仓库:[github.com/chdaliu/homebrew-tap](https://github.com/chdaliu/homebrew-tap);`Formula/narthex.rb` 的母本在本仓库 [Formula/](Formula/) 目录,每次发版后同步过去。`brew upgrade` 后需重跑一次 `narthex autostart install`——launchd 任务指向旧 Cellar 路径(见[开机自启](#开机自启))。
 
 **从源码构建**:
 

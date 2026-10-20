@@ -42,10 +42,10 @@ After entering a username and password, launch and stop your local apps (**Comfy
 **Homebrew** (prebuilt binaries; no Go toolchain needed, upgrades via `brew upgrade`):
 
 ```bash
-brew install lcd/tap/narthex      # taps lcd/tap automatically
+brew install chdaliu/tap/narthex  # taps chdaliu/tap automatically
 ```
 
-> Tap repository: [github.com/lcd/homebrew-tap](https://github.com/lcd/homebrew-tap); the master `Formula/narthex.rb` lives in this repo's [Formula/](Formula/) and is synced there after each release. After a `brew upgrade`, re-run `narthex autostart install` — the launchd job points at the old Cellar path (see [Auto-start](#auto-start)).
+> Tap repository: [github.com/chdaliu/homebrew-tap](https://github.com/chdaliu/homebrew-tap); the master `Formula/narthex.rb` lives in this repo's [Formula/](Formula/) and is synced there after each release. After a `brew upgrade`, re-run `narthex autostart install` — the launchd job points at the old Cellar path (see [Auto-start](#auto-start)).
 
 **Build from source**:
 

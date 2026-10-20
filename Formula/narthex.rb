@@ -1,10 +1,10 @@
 # Master copy of the Homebrew formula: sync into the homebrew-tap repo
-# (github.com/lcd/homebrew-tap) after each release, or install locally with
+# (github.com/chdaliu/homebrew-tap) after each release, or install locally with
 # `brew install --build-from-source ./Formula/narthex.rb`.
 # sha256 placeholders: fill from the release SHA256SUMS.
 class Narthex < Formula
   desc "Lightweight web dashboard to launch and stop local apps"
-  homepage "https://github.com/lcd/Narthex"
+  homepage "https://github.com/chdaliu/narthex"
   license "MIT"
   version "0.0.1" # keep in sync with the latest release tag
 
@@ -16,19 +16,19 @@ class Narthex < Formula
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/lcd/Narthex/releases/download/v#{version}/narthex_#{version}_darwin_arm64.tar.gz"
+      url "https://github.com/chdaliu/narthex/releases/download/v#{version}/narthex_#{version}_darwin_arm64.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     else
-      url "https://github.com/lcd/Narthex/releases/download/v#{version}/narthex_#{version}_darwin_amd64.tar.gz"
+      url "https://github.com/chdaliu/narthex/releases/download/v#{version}/narthex_#{version}_darwin_amd64.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
   end
   on_linux do
     if Hardware::CPU.arm? && Hardware::CPU.is_64_bit?
-      url "https://github.com/lcd/Narthex/releases/download/v#{version}/narthex_#{version}_linux_arm64.tar.gz"
+      url "https://github.com/chdaliu/narthex/releases/download/v#{version}/narthex_#{version}_linux_arm64.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     else
-      url "https://github.com/lcd/Narthex/releases/download/v#{version}/narthex_#{version}_linux_amd64.tar.gz"
+      url "https://github.com/chdaliu/narthex/releases/download/v#{version}/narthex_#{version}_linux_amd64.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
   end
