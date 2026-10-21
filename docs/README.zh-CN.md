@@ -117,7 +117,7 @@ launchd 任务指向当前二进制(`os.Executable()`),移动或重新构建二�
 
 面板「设置」弹窗也有「登录时自启」开关,一键管理用户级 serve 任务。
 
-**Homebrew services 备选**:经 tap 安装的 narthex 也可用 `brew services start narthex` 自启,两者不可同时运行——narthex 会检测 brew 的任务(`~/Library/LaunchAgents` 或 `/Library/LaunchDaemons` 下的 `homebrew.mxcl.narthex` plist)并主动让位:面板自启开关自动禁用并提示,`narthex autostart install` 拒绝执行并报错,`POST /api/autostart` 的 install 返回 409;内置任务的卸载不受影响(便于清理)。想切回内置自启,先运行 `brew services stop narthex`。
+**Homebrew services 备选**:经 tap 安装的 narthex 也可用 `brew services start narthex` 自启,两者不可同时运行——narthex 会检测 brew 的任务(`~/Library/LaunchAgents` 或 `/Library/LaunchDaemons` 下的 `homebrew.mxcl.narthex` plist)并主动让位:面板自启开关自动禁用并提示,`narthex autostart install` 拒绝执行并报错,`POST /api/autostart` 的 install 返回 409;内置任务的卸载不受影响(便于清理)。想切回内置自启,先运行 `brew services stop narthex`。该方式下 serve 运行在 launchd 的极简 `PATH`(`/usr/bin:/bin:/usr/sbin:/sbin`)中;CLI 检测会回退常见的 Homebrew bin 目录(`/opt/homebrew/bin`、`/usr/local/bin`),应用识别不受影响。
 
 > Linux:`narthex autostart` 会返回「仅支持 macOS」提示,请改用 systemd 或 `nohup`。
 

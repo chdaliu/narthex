@@ -128,26 +128,22 @@ func seedMachineSettings(serverDataDir, sourcePath string) error {
 
 // DetectVSCode returns the path to the VS Code CLI (`code`), or "" when it
 // is not installed. Resolution order: NARTHEX_VSCODE_BIN (test/container
-// override), then the `code` executable on PATH.
+// override), then the `code` executable on PATH or in a well-known
+// Homebrew bin directory (see lookPath).
 func DetectVSCode() string {
 	if v := os.Getenv("NARTHEX_VSCODE_BIN"); v != "" {
 		return v
 	}
-	if p, err := exec.LookPath("code"); err == nil {
-		return p
-	}
-	return ""
+	return lookPath("code")
 }
 
 // DetectVSCodium returns the path to the VSCodium CLI (`codium`), or ""
 // when it is not installed. Resolution order: NARTHEX_VSCODIUM_BIN
-// (test/container override), then the `codium` executable on PATH.
+// (test/container override), then the `codium` executable on PATH or in
+// a well-known Homebrew bin directory (see lookPath).
 func DetectVSCodium() string {
 	if v := os.Getenv("NARTHEX_VSCODIUM_BIN"); v != "" {
 		return v
 	}
-	if p, err := exec.LookPath("codium"); err == nil {
-		return p
-	}
-	return ""
+	return lookPath("codium")
 }

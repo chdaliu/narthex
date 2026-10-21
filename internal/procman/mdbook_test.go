@@ -191,6 +191,7 @@ func TestMdbookLifecycle(t *testing.T) {
 }
 
 func TestMdbookStartError(t *testing.T) {
+	withoutBrewFallback(t)
 	t.Setenv("NARTHEX_MDBOOK_BIN", "")
 	t.Setenv("PATH", t.TempDir())
 	m := &Manager{

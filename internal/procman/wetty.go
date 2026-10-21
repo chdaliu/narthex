@@ -95,13 +95,11 @@ func normalizeHost(addr string) string {
 
 // DetectWetty returns the path to the wetty CLI, or "" when it is not
 // installed. Resolution order: NARTHEX_WETTY_BIN (test/container override),
-// then the wetty executable on PATH.
+// then the wetty executable on PATH or in a well-known Homebrew bin
+// directory (see lookPath).
 func DetectWetty() string {
 	if v := os.Getenv("NARTHEX_WETTY_BIN"); v != "" {
 		return v
 	}
-	if p, err := exec.LookPath("wetty"); err == nil {
-		return p
-	}
-	return ""
+	return lookPath("wetty")
 }

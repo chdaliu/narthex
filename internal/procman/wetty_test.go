@@ -136,6 +136,7 @@ func TestWettyLifecycle(t *testing.T) {
 }
 
 func TestWettyStartError(t *testing.T) {
+	withoutBrewFallback(t)
 	// No wetty on PATH and no override → start fails.
 	t.Setenv("NARTHEX_WETTY_BIN", "")
 	t.Setenv("PATH", t.TempDir())

@@ -73,15 +73,13 @@ func isBook(dir string) bool {
 
 // DetectMdbook returns the path to the mdbook CLI, or "" when it is not
 // installed. Resolution order: NARTHEX_MDBOOK_BIN (test/container
-// override), then the mdbook executable on PATH.
+// override), then the mdbook executable on PATH or in a well-known
+// Homebrew bin directory (see lookPath).
 func DetectMdbook() string {
 	if v := os.Getenv("NARTHEX_MDBOOK_BIN"); v != "" {
 		return v
 	}
-	if p, err := exec.LookPath("mdbook"); err == nil {
-		return p
-	}
-	return ""
+	return lookPath("mdbook")
 }
 
 // ValidBookName reports whether name is usable as a new book directory:

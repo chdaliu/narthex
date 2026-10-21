@@ -61,6 +61,7 @@ Key flows:
 | `internal/restart/restart.go` | `Self()`: resolves `os.Executable()` (`EvalSymlinks`+`Abs`) and re-execs it in place with `syscall.Exec`, preserving argv/env (the non-launchd fallback); `execve` is a test seam |
 | `internal/i18n/i18n.go` | CLI/API message catalogs (en / zh-CN / zh-TW), `T(lang, key)` with en fallback |
 | `internal/procman/backend.go` | `Backend` interface (`Start(kind, dir, id)`/`Stop`/`Status(kind, pid, port)`) and `Status` struct (single exit for process operations) |
+| `internal/procman/lookpath.go` | CLI lookup: `lookPath` probes well-known Homebrew bin dirs (`/opt/homebrew/bin`, `/usr/local/bin`, plus the linuxbrew dirs on Linux) when `exec.LookPath` misses — serve launched by launchd (`brew services`/built-in autostart) only gets the system dirs on PATH, and without the fallback every CLI kind would report as not installed |
 | `internal/procman/manager.go` | `Manager`: kind dispatch in `Start` (comfyui → server, opencode → web, mdbook → serve, vscode/vscodium → serve-web, wetty → wetty, emulatorjs → the narthex `emulator-serve` child), `spawn` (process group + logs), `Stop` (SIGTERM→SIGKILL), `Status` (Alive + TCP health check), `Alive`, `FreePort`/`freePortIn` |
 | `internal/procman/app.go` | `.app` detection (`detectAppBundle`: env override + `/Applications` + `~/Applications`) |
 | `internal/procman/comfyui.go` | ComfyUI server launch (`main.py --port --listen`, python resolved from `standalone-env`/`.venv`/PATH), `comfyLaunchArgs` (passes through the desktop's shared model config `--extra-model-paths-config`, shared/per-install input-output dirs and `launchArgs`), `DetectComfyUIInstalls` (code dirs from `installations.json`, overridable via `NARTHEX_COMFY_DESKTOP_DIR`), `DetectComfyUIApp` (`Comfy Desktop.app`, overridable via `NARTHEX_COMFY_APP_DIR`) |
@@ -91,6 +92,7 @@ Key flows:
 - Go ≥ 1.26 (`go.mod` declares `go 1.26`)
 - At runtime: the managed apps (`Comfy Desktop.app` installed in `/Applications` or `~/Applications`, or pointed to via `NARTHEX_COMFY_APP_DIR`; the `opencode` CLI on PATH, or pointed to via `NARTHEX_OPENCODE_BIN`; the `mdbook` CLI on PATH + a non-empty `mdbook.dirs`, or pointed to via `NARTHEX_MDBOOK_BIN`; the `code` CLI on PATH, or pointed to via `NARTHEX_VSCODE_BIN`; the `codium` CLI on PATH, or pointed to via `NARTHEX_VSCODIUM_BIN`; the `wetty` CLI on PATH, or pointed to via `NARTHEX_WETTY_BIN`, plus an SSH server on `wetty.sshHost`); not needed for build or tests
 - macOS (development) or Linux; test scripts need `bash`, `curl`, `python3`
+- serve launched by launchd (`brew services` or the built-in autostart job) runs with only `/usr/bin:/bin:/usr/sbin:/sbin` on PATH; the CLI kinds (opencode/mdbook/vscode/vscodium/wetty) and the ComfyUI python resolve through `procman.lookPath`, which falls back to well-known Homebrew bin directories when PATH misses — no dependence on the user's shell PATH
 
 ## 5. Reproduction (from scratch to working)
 

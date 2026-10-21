@@ -48,7 +48,7 @@ func (m *Manager) comfyUIPython(dir string) (string, error) {
 		}
 	}
 	for _, name := range []string{"python3", "python"} {
-		if p, err := exec.LookPath(name); err == nil {
+		if p := lookPath(name); p != "" {
 			return p, nil
 		}
 	}

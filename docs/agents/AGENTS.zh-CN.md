@@ -60,6 +60,7 @@ internal/store   原子写 JSON:config.json / state.json
 | `internal/restart/restart.go` | `Self()`:解析 `os.Executable()`(`EvalSymlinks`+`Abs`)后以保留 argv/env 的 `syscall.Exec` 原地重执行(非 launchd 场景的回退);`execve` 为测试接缝 |
 | `internal/i18n/i18n.go` | CLI/API 消息目录(en / zh-CN / zh-TW),`T(lang, key)` 翻译 + en 回退 |
 | `internal/procman/backend.go` | `Backend` 接口(`Start(kind, dir, id)`/`Stop`/`Status(kind, pid, port)`)与 `Status` 结构(进程操作唯一出口) |
+| `internal/procman/lookpath.go` | CLI 探测:`lookPath` 在 `exec.LookPath` 未命中时回退已知 Homebrew bin 目录(`/opt/homebrew/bin`、`/usr/local/bin`,Linux 追加 linuxbrew 目录)——launchd 启动的 serve(`brew services`/内置自启)PATH 只有系统目录,没有回退时所有 CLI kind 都会误报未安装 |
 | `internal/procman/manager.go` | `Manager`:`Start` 按 kind 分发(comfyui → 服务器,opencode → web,mdbook → serve,vscode/vscodium → serve-web,wetty → wetty,emulatorjs → narthex 自身 `emulator-serve` 子进程)、`spawn`(进程组+日志)、`Stop`(SIGTERM→SIGKILL)、`Status`(Alive + TCP 健康检查)、`Alive`、`FreePort`/`freePortIn` |
 | `internal/procman/app.go` | `.app` 检测(`detectAppBundle`:env 覆盖 + `/Applications` + `~/Applications`) |
 | `internal/procman/comfyui.go` | ComfyUI 服务器启动(`main.py --port --listen`,python 解析 `standalone-env`/`.venv`/PATH)、`comfyLaunchArgs`(透传桌面端共享模型配置 `--extra-model-paths-config`、共享/实例输入输出目录、`launchArgs`)、`DetectComfyUIInstalls`(从 `installations.json` 解析代码目录,`NARTHEX_COMFY_DESKTOP_DIR` 可覆盖)、`DetectComfyUIApp`(`Comfy Desktop.app`,`NARTHEX_COMFY_APP_DIR` 可覆盖) |
@@ -90,6 +91,7 @@ internal/store   原子写 JSON:config.json / state.json
 - Go ≥ 1.26(`go.mod` 声明 `go 1.26`)
 - 运行时:被管理的应用(`Comfy Desktop.app` 位于 `/Applications` 或 `~/Applications`,或经 `NARTHEX_COMFY_APP_DIR` 指定;`opencode` CLI 位于 PATH,或经 `NARTHEX_OPENCODE_BIN` 指定;`mdbook` CLI 位于 PATH 且 `mdbook.dirs` 非空,或经 `NARTHEX_MDBOOK_BIN` 指定;`code` CLI 位于 PATH,或经 `NARTHEX_VSCODE_BIN` 指定;`codium` CLI 位于 PATH,或经 `NARTHEX_VSCODIUM_BIN` 指定);构建与测试不需要
 - macOS(开发环境)或 Linux;测试脚本依赖 `bash`、`curl`、`python3`
+- serve 由 launchd(`brew services`/内置自启)启动时 PATH 只有 `/usr/bin:/bin:/usr/sbin:/sbin`;CLI 类应用(opencode/mdbook/vscode/vscodium/wetty)与 ComfyUI python 均经 `procman.lookPath` 解析,PATH 未命中时回退已知 Homebrew bin 目录,不依赖用户 shell 的 PATH
 
 ## 5. 复现步骤(从零到可用)
 

@@ -119,7 +119,7 @@ The job points at the current binary (`os.Executable()`), so reinstall after you
 
 The **Settings** modal in the dashboard also has a "Start at login" switch for the user-level serve job (one click, no terminal).
 
-**Homebrew services alternative**: when narthex was installed via the tap, `brew services start narthex` is an equivalent auto-start mechanism. The two must not run at once — narthex detects the brew job (the `homebrew.mxcl.narthex` plist in `~/Library/LaunchAgents` or `/Library/LaunchDaemons`) and yields: the dashboard's start-at-login switch disables itself with a hint, `narthex autostart install` refuses with an error, and `POST /api/autostart` install returns 409. Uninstalling the built-in job stays allowed for cleanup. To switch back to the built-in autostart, run `brew services stop narthex` first.
+**Homebrew services alternative**: when narthex was installed via the tap, `brew services start narthex` is an equivalent auto-start mechanism. The two must not run at once — narthex detects the brew job (the `homebrew.mxcl.narthex` plist in `~/Library/LaunchAgents` or `/Library/LaunchDaemons`) and yields: the dashboard's start-at-login switch disables itself with a hint, `narthex autostart install` refuses with an error, and `POST /api/autostart` install returns 409. Uninstalling the built-in job stays allowed for cleanup. To switch back to the built-in autostart, run `brew services stop narthex` first. Under this launch method serve runs with launchd's minimal `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`); CLI detection still works because it falls back to the well-known Homebrew bin directories (`/opt/homebrew/bin`, `/usr/local/bin`).
 
 > Linux note: `narthex autostart` returns a "macOS only" message; use systemd or `nohup` instead.
 

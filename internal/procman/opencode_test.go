@@ -197,6 +197,7 @@ func TestOpencodeLifecycle(t *testing.T) {
 }
 
 func TestOpencodeErrors(t *testing.T) {
+	withoutBrewFallback(t)
 	// No opencode on PATH and no override → start fails.
 	t.Setenv("NARTHEX_OPENCODE_BIN", "")
 	t.Setenv("PATH", t.TempDir())

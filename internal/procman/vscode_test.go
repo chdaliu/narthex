@@ -39,6 +39,7 @@ exit 0
 }
 
 func TestDetectVSCode(t *testing.T) {
+	withoutBrewFallback(t)
 	t.Setenv("NARTHEX_VSCODE_BIN", "/opt/fake/bin/code")
 	if got := DetectVSCode(); got != "/opt/fake/bin/code" {
 		t.Fatalf("DetectVSCode with override = %q", got)
@@ -66,6 +67,7 @@ func TestDetectVSCode(t *testing.T) {
 }
 
 func TestDetectVSCodium(t *testing.T) {
+	withoutBrewFallback(t)
 	t.Setenv("NARTHEX_VSCODIUM_BIN", "/opt/fake/bin/codium")
 	if got := DetectVSCodium(); got != "/opt/fake/bin/codium" {
 		t.Fatalf("DetectVSCodium with override = %q", got)
@@ -262,6 +264,7 @@ func TestSeedMachineSettings(t *testing.T) {
 }
 
 func TestVSCodeFamilyStartError(t *testing.T) {
+	withoutBrewFallback(t)
 	for _, tc := range []struct {
 		kind   string
 		envKey string

@@ -129,13 +129,11 @@ func prependPath(env []string, prefix string) []string {
 
 // DetectOpencode returns the path to the opencode CLI, or "" when it is
 // not installed. Resolution order: NARTHEX_OPENCODE_BIN (test/container
-// override), then the opencode executable on PATH.
+// override), then the opencode executable on PATH or in a well-known
+// Homebrew bin directory (see lookPath).
 func DetectOpencode() string {
 	if v := os.Getenv("NARTHEX_OPENCODE_BIN"); v != "" {
 		return v
 	}
-	if p, err := exec.LookPath("opencode"); err == nil {
-		return p
-	}
-	return ""
+	return lookPath("opencode")
 }
