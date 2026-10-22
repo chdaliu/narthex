@@ -450,6 +450,11 @@ autostart 參數:
 		ZHCN: "narthex %s 正在监听 http://%s",
 		ZHTW: "narthex %s 正在監聽 http://%s",
 	},
+	"msg.lanAccess": {
+		EN:   "LAN access: http://%s",
+		ZHCN: "局域网访问: http://%s",
+		ZHTW: "區域網路存取: http://%s",
+	},
 	"msg.alreadyRunning": {
 		EN:   "narthex is already running at http://%s, no need to start again",
 		ZHCN: "narthex 已在 http://%s 运行,无需重复启动",

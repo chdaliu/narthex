@@ -206,6 +206,7 @@ Narthex listens on **`0.0.0.0`** by default, so the dashboard is reachable from 
 
 - From this machine: `http://127.0.0.1:9090`
 - From the LAN/internet: `http://<machine IP>:9090` (e.g. `http://192.168.1.100:9090`)
+- `narthex serve` prints the detected LAN address(es) at startup, and **Settings → LAN access** lists them — use one of those from another device or in a reverse proxy/tunnel (the `0.0.0.0` listen address is not visitable)
 
 Some apps are served **through narthex itself**, so they work behind a single exposed port (a reverse proxy or tunnel that only forwards the dashboard): **mdBook** is proxied same-origin at `/mdbook/`, **EmulatorJS** at `/emulator/`, and **opencode** through its gateway (`opencode.gatewayPort`, default 4399). ComfyUI, VS Code, VSCodium and WeTTY are opened on their own ports, so a single-port proxy must forward those too (or set an **internal network address** that reaches them). The mdBook/EmulatorJS/opencode cards have a per-card **reverse-proxy toggle**: turn it off to open the app's own direct port instead (useful when the proxy path is not wanted, e.g. to debug the backing server).
 

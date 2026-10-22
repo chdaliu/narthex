@@ -19,6 +19,7 @@ import (
 	"narthex/internal/autostart"
 	"narthex/internal/emulatorserver"
 	"narthex/internal/i18n"
+	"narthex/internal/netutil"
 	"narthex/internal/procman"
 	"narthex/internal/restart"
 	"narthex/internal/secretbox"
@@ -246,6 +247,11 @@ func cmdServe(args []string) error {
 	fmt.Println(L("msg.listening", version, addr))
 	if !api.IsLoopback(cfg.Hostname) {
 		fmt.Println(L("warn.insecureHTTP", addr))
+		// 0.0.0.0 is a listen address, not a visitable one: print the real
+		// LAN addresses other devices (or a tunnel) should use.
+		for _, lan := range netutil.LANIPv4s() {
+			fmt.Println(L("msg.lanAccess", net.JoinHostPort(lan, strconv.Itoa(cfg.Port))))
+		}
 	}
 	// The gateway lives only while opencode runs; reconcile picks up an
 	// opencode process left running from a previous serve.

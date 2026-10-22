@@ -18,6 +18,7 @@ import (
 	"narthex/internal/autostart"
 	"narthex/internal/gateway"
 	"narthex/internal/i18n"
+	"narthex/internal/netutil"
 	"narthex/internal/procman"
 	"narthex/internal/secretbox"
 	"narthex/internal/store"
@@ -831,8 +832,24 @@ func (s *Service) HandleMeta(w http.ResponseWriter, r *http.Request) {
 		"slogan":          s.sloganValue(),
 		"username":        s.Username,
 		"internalAddress": s.Config.InternalAddress,
+		"lanUrls":         s.lanURLs(),
 		"gatewayPort":     s.Config.Opencode.GatewayPort,
 	})
+}
+
+// lanURLs lists the dashboard base URLs on this machine's LAN interfaces.
+// Empty in local-only mode (hostname 127.0.0.1). Other devices — including
+// a reverse proxy or tunnel — should point at one of these, unlike the
+// 0.0.0.0 listen address, which is not visitable.
+func (s *Service) lanURLs() []string {
+	if IsLoopback(s.Config.Hostname) {
+		return []string{}
+	}
+	urls := make([]string, 0, 2)
+	for _, ip := range netutil.LANIPv4s() {
+		urls = append(urls, fmt.Sprintf("http://%s/", net.JoinHostPort(ip, strconv.Itoa(s.Config.Port))))
+	}
+	return urls
 }
 
 func assetNames(dir, ext string) []string {

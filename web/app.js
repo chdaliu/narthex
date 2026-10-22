@@ -32,7 +32,7 @@ const sloganEl = $("#slogan");
 const modalRoot = $("#modal-root");
 const bgEl = $("#bg");
 
-let meta = { icons: [], backgrounds: [], apps: {}, lang: "en", pageBackground: "bg-05", slogan: "", internalAddress: "", gatewayPort: 0 };
+let meta = { icons: [], backgrounds: [], apps: {}, lang: "en", pageBackground: "bg-05", slogan: "", internalAddress: "", lanUrls: [], gatewayPort: 0 };
 let cardEls = new Map();
 let bgMap = new Map();
 let lastCards = [];
@@ -1292,6 +1292,11 @@ function buildSettingsModal() {
       <div class="muted" style="font-size:12px;margin-top:4px">${t("modal.internalAddressHint")}</div>
     </div>
     <div>
+      <div class="field-label">${t("modal.lanUrlsLabel")}</div>
+      <div id="set-lan-urls" style="margin-top:6px"></div>
+      <div class="muted" style="font-size:12px;margin-top:4px">${t("modal.lanUrlsHint")}</div>
+    </div>
+    <div>
       <div class="field-label">${t("modal.autostartLabel")}</div>
       <label class="slogan-toggle">
         <input type="checkbox" id="set-autostart-on"> ${t("modal.autostartLabel")}
@@ -1379,8 +1384,7 @@ function buildSettingsModal() {
 
   const internalAddrInput = $("#set-internal-addr", modal);
   internalAddrInput.value = meta.internalAddress || "";
-  let addrTimer = null;
-  internalAddrInput.addEventListener("input", () => {
+  let addrTimer = null;  internalAddrInput.addEventListener("input", () => {
     clearTimeout(addrTimer);
     const value = internalAddrInput.value.trim();
     addrTimer = setTimeout(async () => {
@@ -1395,6 +1399,25 @@ function buildSettingsModal() {
       }
     }, 400);
   });
+
+  const lanUrlsBox = $("#set-lan-urls", modal);
+  const lanUrls = Array.isArray(meta.lanUrls) ? meta.lanUrls : [];
+  if (lanUrls.length === 0) {
+    lanUrlsBox.className = "muted";
+    lanUrlsBox.style.fontSize = "12px";
+    lanUrlsBox.textContent = t("modal.lanUrlsEmpty");
+  } else {
+    for (const u of lanUrls) {
+      const a = document.createElement("a");
+      a.href = u;
+      a.textContent = u;
+      a.target = "_blank";
+      a.rel = "noreferrer";
+      a.style.display = "block";
+      a.style.fontSize = "13px";
+      lanUrlsBox.appendChild(a);
+    }
+  }
 
   const autoOn = $("#set-autostart-on", modal);
   const autoHint = $("#set-autostart-hint", modal);
