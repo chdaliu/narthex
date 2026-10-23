@@ -139,6 +139,15 @@ type VscodiumConfig struct {
 	DataDir string `json:"dataDir,omitempty"`
 }
 
+// WeTTY SSH modes (WettyConfig.SSHMode).
+const (
+	// WettySSHManaged spawns a private sshd bound to 127.0.0.1 for the
+	// card's lifetime (default); no system SSH server is needed.
+	WettySSHManaged = "managed"
+	// WettySSHSystem connects to WettyConfig.SSHHost/SSHPort instead.
+	WettySSHSystem = "system"
+)
+
 // WettyConfig controls how the WeTTY terminal-over-web server is spawned.
 type WettyConfig struct {
 	// Hostname is the listen address of the WeTTY server. 0.0.0.0 makes it
@@ -146,13 +155,24 @@ type WettyConfig struct {
 	Hostname string `json:"hostname"`
 	// PortRange is the range a free port is picked from.
 	PortRange [2]int `json:"portRange"`
-	// SSHHost is the SSH server WeTTY connects to (--ssh-host). Defaults to
-	// localhost (the narthex host).
+	// SSHMode selects how WeTTY reaches SSH: WettySSHManaged (default)
+	// spawns a private sshd bound to 127.0.0.1 for the card's lifetime,
+	// WettySSHSystem uses SSHHost/SSHPort as-is.
+	SSHMode string `json:"sshMode,omitempty"`
+	// SSHPortRange is the range a free port is picked from for the managed
+	// sshd.
+	SSHPortRange [2]int `json:"sshPortRange,omitempty"`
+	// SSHHost is the SSH server WeTTY connects to (--ssh-host) in system
+	// mode. Defaults to localhost (the narthex host). In managed mode it
+	// must be a loopback address; pointing it at another machine always
+	// connects directly.
 	SSHHost string `json:"sshHost,omitempty"`
-	// SSHPort is the SSH server port (--ssh-port). 0 uses WeTTY's default.
+	// SSHPort is the SSH server port (--ssh-port) in system mode. 0 uses
+	// WeTTY's default.
 	SSHPort int `json:"sshPort,omitempty"`
 	// SSHUser is the default SSH user (--ssh-user). Empty lets WeTTY prompt
-	// for a username.
+	// for a username; in managed mode it defaults to the narthex user (the
+	// only account the private sshd accepts).
 	SSHUser string `json:"sshUser,omitempty"`
 }
 
@@ -247,9 +267,11 @@ func DefaultConfig() *Config {
 			PortRange: [2]int{4700, 4899},
 		},
 		Wetty: WettyConfig{
-			Hostname:  "0.0.0.0",
-			PortRange: [2]int{4900, 5099},
-			SSHHost:   "localhost",
+			Hostname:     "0.0.0.0",
+			PortRange:    [2]int{4900, 5099},
+			SSHMode:      WettySSHManaged,
+			SSHPortRange: [2]int{5300, 5399},
+			SSHHost:      "localhost",
 		},
 		EmulatorJS: EmulatorJSConfig{
 			Hostname:   "0.0.0.0",
@@ -359,6 +381,23 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if c.Wetty.SSHHost == "" {
 		c.Wetty.SSHHost = def.Wetty.SSHHost
+	}
+	if c.Wetty.SSHPortRange == [2]int{0, 0} {
+		c.Wetty.SSHPortRange = def.Wetty.SSHPortRange
+	}
+	if c.Wetty.SSHMode == "" {
+		// Backward compatibility: an explicitly configured sshPort meant
+		// "use the system sshd on that port", so do not silently replace it
+		// with a managed sshd. Fresh/old configs without it default to the
+		// managed endpoint.
+		if c.Wetty.SSHPort != 0 {
+			c.Wetty.SSHMode = WettySSHSystem
+		} else {
+			c.Wetty.SSHMode = def.Wetty.SSHMode
+		}
+	}
+	if c.Wetty.SSHMode != WettySSHManaged && c.Wetty.SSHMode != WettySSHSystem {
+		return nil, fmt.Errorf("wetty.sshMode must be %q or %q, got %q", WettySSHManaged, WettySSHSystem, c.Wetty.SSHMode)
 	}
 	if c.EmulatorJS.Hostname == "" {
 		c.EmulatorJS.Hostname = def.EmulatorJS.Hostname

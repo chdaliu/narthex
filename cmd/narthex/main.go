@@ -200,6 +200,9 @@ func cmdServe(args []string) error {
 	backend.VscodiumMachineSettingsFile = resolveFromDir(dir, cfg.Vscodium.MachineSettingsFile)
 	backend.WettyHostname = cfg.Wetty.Hostname
 	backend.WettyPortRange = cfg.Wetty.PortRange
+	backend.WettySSHMode = cfg.Wetty.SSHMode
+	backend.WettySSHPortRange = cfg.Wetty.SSHPortRange
+	backend.WettySSHDDir = filepath.Join(dir, "wetty-sshd")
 	backend.WettySSHHost = cfg.Wetty.SSHHost
 	backend.WettySSHPort = cfg.Wetty.SSHPort
 	backend.WettySSHUser = cfg.Wetty.SSHUser

@@ -155,6 +155,26 @@ exec python3 -m http.server "$port" --bind 127.0.0.1
 SHIM
 chmod +x "$TMP/bin/wetty"
 
+# Fake `sshd` for the managed WeTTY endpoint: serves HTTP on the port given
+# via `-p` and records its arguments so the smoke can assert the temporary
+# loopback port opens and closes with the card. No exec: the shell keeps the
+# generated config path on its command line, which is what the manager
+# verifies before killing a pid recorded in the state file.
+cat > "$TMP/bin/sshd" <<'SHIM'
+#!/bin/sh
+if [ -n "$NARTHEX_SSHD_ARGS_FILE" ]; then
+  printf '%s\n' "$*" > "$NARTHEX_SSHD_ARGS_FILE"
+fi
+port=5300
+prev=
+for a in "$@"; do
+  if [ "$prev" = "-p" ]; then port=$a; fi
+  prev=$a
+done
+python3 -m http.server "$port" --bind 127.0.0.1
+SHIM
+chmod +x "$TMP/bin/sshd"
+
 # A recognized mdBook project plus a configured project directory.
 MDBOOK_BOOKS="$TMP/mdbook-books"
 mkdir -p "$MDBOOK_BOOKS/guide/src"
@@ -227,7 +247,7 @@ kill "$AUTO_PID" 2>/dev/null || true
 wait "$AUTO_PID" 2>/dev/null || true
 
 echo "== serve =="
-OC_ENV_FILE="$TMP/opencode-env.txt" PATH="$TMP/bin:$PATH" NARTHEX_COMFY_APP_DIR="$COMFYAPP" NARTHEX_COMFY_DESKTOP_DIR="$COMFYDESK" NARTHEX_MDBOOK_BIN="$TMP/bin/mdbook" NARTHEX_VSCODE_BIN="$TMP/bin/code" NARTHEX_VSCODIUM_BIN="$TMP/bin/codium" NARTHEX_WETTY_BIN="$TMP/bin/wetty" NARTHEX_WETTY_ARGS_FILE="$TMP/wetty-args.txt" "$BIN" serve --config "$CFG" --port "$PORT" >"$TMP/server.log" 2>&1 &
+OC_ENV_FILE="$TMP/opencode-env.txt" PATH="$TMP/bin:$PATH" NARTHEX_COMFY_APP_DIR="$COMFYAPP" NARTHEX_COMFY_DESKTOP_DIR="$COMFYDESK" NARTHEX_MDBOOK_BIN="$TMP/bin/mdbook" NARTHEX_VSCODE_BIN="$TMP/bin/code" NARTHEX_VSCODIUM_BIN="$TMP/bin/codium" NARTHEX_WETTY_BIN="$TMP/bin/wetty" NARTHEX_WETTY_ARGS_FILE="$TMP/wetty-args.txt" NARTHEX_SSHD_BIN="$TMP/bin/sshd" NARTHEX_SSHD_ARGS_FILE="$TMP/sshd-args.txt" "$BIN" serve --config "$CFG" --port "$PORT" >"$TMP/server.log" 2>&1 &
 SRV_PID=$!
 for _ in $(seq 1 40); do
   curl -fsS "http://127.0.0.1:$PORT/api/session" >/dev/null 2>&1 && break
@@ -554,7 +574,34 @@ assert f'--allowed-origin http://localhost:{port}' in args, args
 assert f'--allowed-origin http://127.0.0.1:{port}' in args, args
 assert args.count('--allowed-origin') == 2, args
 PY
+# Managed mode: WeTTY talks to a private loopback sshd whose temporary port
+# must be open while the card runs and closed with it.
+SSHDARGS=$(cat "$TMP/sshd-args.txt") || fail "managed sshd args dump missing"
+PORTSSH=$(python3 -c "import sys,re;m=re.search(r'-p (\d+)',sys.argv[1]);print(m.group(1) if m else '')" "$SSHDARGS")
+[ -n "$PORTSSH" ] || fail "managed sshd args missing -p: $SSHDARGS"
+python3 - "$WETTYARGS" "$SSHDARGS" "$PORTSSH" "$TMP/wetty-sshd/sshd_config" <<'PY'
+import sys
+wetty, sshd, port, cfg = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+assert '--ssh-host 127.0.0.1' in wetty, wetty
+assert f'--ssh-port {port}' in wetty, wetty
+assert 5300 <= int(port) <= 5399, port
+assert f'-f {cfg}' in sshd, sshd
+assert f'-p {port}' in sshd, sshd
+PY
+python3 - "$TMP/wetty-sshd/state.json" "$PORTSSH" <<'PY'
+import json, sys
+st = json.load(open(sys.argv[1]))
+assert st['sshdPid'] > 0 and st['wettyPid'] > 0, st
+assert st['sshPort'] == int(sys.argv[2]), st
+PY
+python3 -c 'import socket,sys;s=socket.socket();s.settimeout(1);sys.exit(0 if s.connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0 else 1)' "$PORTSSH" || fail "managed sshd port $PORTSSH is not open"
 curl -fsS -b "$COOKIE" -X POST "http://127.0.0.1:$PORT/api/cards/$ID/stop" >/dev/null || fail "wetty stop failed"
+for _ in $(seq 1 20); do
+  python3 -c 'import socket,sys;s=socket.socket();s.settimeout(1);sys.exit(0 if s.connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0 else 1)' "$PORTSSH" || break
+  sleep 0.1
+done
+python3 -c 'import socket,sys;s=socket.socket();s.settimeout(1);sys.exit(0 if s.connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0 else 1)' "$PORTSSH" && fail "managed sshd port $PORTSSH still open after stop"
+[ ! -f "$TMP/wetty-sshd/state.json" ] || fail "managed sshd state should be removed after stop"
 curl -fsS -b "$COOKIE" -X DELETE "http://127.0.0.1:$PORT/api/cards/$ID" >/dev/null || fail "wetty delete failed"
 
 echo "== emulatorjs games API =="

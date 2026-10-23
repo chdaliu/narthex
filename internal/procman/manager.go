@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -86,6 +87,19 @@ type Manager struct {
 	// WettySSHUser is the default SSH user (--ssh-user); empty lets WeTTY
 	// prompt for a username.
 	WettySSHUser string
+	// WettySSHMode selects how WeTTY reaches SSH: "managed" (default)
+	// spawns a private sshd bound to 127.0.0.1 for the card's lifetime,
+	// "system" connects to WettySSHHost/WettySSHPort as configured.
+	WettySSHMode string
+	// WettySSHPortRange is the range a free port is picked from for the
+	// managed sshd.
+	WettySSHPortRange [2]int
+	// WettySSHDDir holds the generated managed-sshd config, host key and
+	// pid state. Empty falls back to <LogDir>/wetty-sshd.
+	WettySSHDDir string
+	// wettyMu serializes managed-sshd state changes between Start, Stop
+	// and the wetty exit callback.
+	wettyMu sync.Mutex
 	// EmulatorHostname is the listen address passed to the EmulatorJS
 	// child server (0.0.0.0 makes it reachable from other devices).
 	EmulatorHostname string
@@ -162,9 +176,16 @@ func (m *Manager) Start(kind, dir, id string, hosts []string) (pid int, port int
 }
 
 // spawn launches cmd in its own process group, appending output to
-// <LogDir>/<id>.log.
-func (m *Manager) spawn(cmd *exec.Cmd, id string) (int, error) {
+// <LogDir>/<id>.log. The child PATH always carries the well-known Homebrew
+// bin directories (see childPathEnv), so Node-based CLIs resolve their
+// runtime even when serve was started by launchd. Optional onExit callbacks
+// run once the child has exited (stop sidecars, clean up state files).
+func (m *Manager) spawn(cmd *exec.Cmd, id string, onExit ...func(pid int)) (int, error) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if cmd.Env == nil {
+		cmd.Env = os.Environ()
+	}
+	cmd.Env = childPathEnv(cmd.Env)
 
 	logPath := filepath.Join(m.LogDir, id+".log")
 	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -179,16 +200,24 @@ func (m *Manager) spawn(cmd *exec.Cmd, id string) (int, error) {
 		log.Close()
 		return 0, fmt.Errorf("start %s: %w", cmd.Path, err)
 	}
+	pid := cmd.Process.Pid
 	go func() {
 		cmd.Wait()
 		log.Close()
+		for _, fn := range onExit {
+			fn(pid)
+		}
 	}()
-	return cmd.Process.Pid, nil
+	return pid, nil
 }
 
 // Stop terminates the process group of pid.
 func (m *Manager) Stop(pid int) error {
-	return Stop(pid)
+	err := Stop(pid)
+	// The WeTTY card owns a sidecar sshd that must die with it. The pid
+	// check inside keeps stopping other kinds from touching it.
+	m.stopManagedSSHD(pid)
+	return err
 }
 
 // Status reports the live state of the instance with pid/port: the

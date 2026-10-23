@@ -205,3 +205,48 @@ func TestSloganSemantics(t *testing.T) {
 		t.Fatalf("custom slogan not preserved, got %v", got.Slogan)
 	}
 }
+
+func TestWettySSHModeDefaultsAndNormalization(t *testing.T) {
+	def := DefaultConfig()
+	if def.Wetty.SSHMode != WettySSHManaged || def.Wetty.SSHPortRange != [2]int{5300, 5399} {
+		t.Fatalf("wetty defaults = %+v", def.Wetty)
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, ConfigFile)
+
+	// Missing sshMode defaults to the managed endpoint.
+	if err := os.WriteFile(path, []byte(`{"passwordHash":"x"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Wetty.SSHMode != WettySSHManaged {
+		t.Fatalf("empty sshMode = %q, want %q", c.Wetty.SSHMode, WettySSHManaged)
+	}
+	if c.Wetty.SSHPortRange != [2]int{5300, 5399} {
+		t.Fatalf("empty sshPortRange = %v", c.Wetty.SSHPortRange)
+	}
+
+	// An old config with an explicit sshPort keeps using the system sshd.
+	if err := os.WriteFile(path, []byte(`{"passwordHash":"x","wetty":{"sshPort":2222}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err = LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Wetty.SSHMode != WettySSHSystem {
+		t.Fatalf("sshPort without sshMode = %q, want %q", c.Wetty.SSHMode, WettySSHSystem)
+	}
+
+	// Unknown modes are rejected instead of silently picking a behavior.
+	if err := os.WriteFile(path, []byte(`{"passwordHash":"x","wetty":{"sshMode":"auto"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(path); err == nil {
+		t.Fatal("unknown wetty.sshMode should fail to load")
+	}
+}
