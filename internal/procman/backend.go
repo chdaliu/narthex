@@ -14,7 +14,10 @@ type Backend interface {
 	// to <log dir>/<id>.log. hosts lists the browser-side hostnames the
 	// card will be opened from (empty for purely local use); servers with
 	// origin checks (WeTTY >= 4) derive their trusted origins from it.
-	Start(kind, dir, id string, hosts []string) (pid int, port int, err error)
+	// noAuth asks the app's server to skip its own login gate so it can be
+	// fronted by the narthex gateway (gitvelo proxy mode); it is ignored by
+	// kinds whose server has no such switch.
+	Start(kind, dir, id string, hosts []string, noAuth bool) (pid int, port int, err error)
 	// Stop terminates the instance with pid.
 	Stop(pid int) error
 	// Status reports the live state of the instance.

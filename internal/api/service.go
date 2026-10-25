@@ -56,6 +56,10 @@ type Service struct {
 	// the mdbook CLI. Defaults to a wrapper around
 	// procman.CreateMdbookProject; overridable in tests.
 	MdbookCreate func(parent, name string) error
+	// GitveloBin returns the path to the GitVelo CLI (`gitvelo`), or ""
+	// when it is not installed. Defaults to procman.DetectGitvelo;
+	// overridable in tests.
+	GitveloBin func() string
 	// VscodeBin returns the path to the VS Code CLI (`code`), or "" when it
 	// is not installed. Defaults to procman.DetectVSCode; overridable in
 	// tests.
@@ -101,6 +105,17 @@ type Service struct {
 	// bound; a difference from the configured port marks a pending change
 	// that is applied once the opencode card is restarted.
 	gwWanted int
+	// GitveloGatewayPort is the port the gitvelo reverse-proxy gateway
+	// listens on; 0 until the listener is bound. Like GatewayPort it stays
+	// bound for the whole serve lifetime.
+	GitveloGatewayPort int
+	// GitveloGatewayHandler builds the gitvelo gateway handler; injected
+	// in cmd/narthex. When nil (tests), its lifecycle is a no-op.
+	GitveloGatewayHandler func() http.Handler
+	// gv is the gitvelo gateway listener, bound for the serve lifetime.
+	gv gateway.Server
+	// gvWanted mirrors gwWanted for the gitvelo gateway.
+	gvWanted int
 }
 
 // NewService builds a Service. State and config are already loaded by the
@@ -120,6 +135,7 @@ func NewService(dir string, cfg *store.Config, state *store.State, backend procm
 		MdbookCreate: func(parent, name string) error {
 			return procman.CreateMdbookProject(procman.DetectMdbook(), parent, name)
 		},
+		GitveloBin:    procman.DetectGitvelo,
 		VscodeBin:     procman.DetectVSCode,
 		VscodiumBin:   procman.DetectVSCodium,
 		WettyBin:      procman.DetectWetty,
@@ -204,29 +220,52 @@ func (s *Service) EmulatorGatewayTarget() (addr string, ok bool) {
 	return "", false
 }
 
+// GitveloGatewayTarget resolves the running gitvelo server for the
+// same-origin reverse proxy: the loopback address of the running gitvelo
+// card, but only while it runs in proxy mode (--no-auth on loopback).
+// Direct-mode instances keep their own login and are never exposed through
+// the gateway, so ok is false and the gateway answers the stopped page.
+func (s *Service) GitveloGatewayTarget() (addr string, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, c := range s.State.Cards {
+		if c.Kind != store.KindGitvelo || c.Port <= 0 {
+			continue
+		}
+		if c.DisableProxy {
+			return "", false
+		}
+		if !s.Backend.Status(c.Kind, c.PID, c.Port).Alive {
+			return "", false
+		}
+		return net.JoinHostPort("127.0.0.1", strconv.Itoa(c.Port)), true
+	}
+	return "", false
+}
+
 // proxyCapable reports whether kind supports the per-card reverse-proxy
 // toggle: its "Open" URL can be either the same-origin narthex proxy or the
 // app's own direct URL.
 func proxyCapable(kind string) bool {
 	switch kind {
-	case store.KindMdbook, store.KindEmulatorJS, store.KindOpencode:
+	case store.KindMdbook, store.KindEmulatorJS, store.KindOpencode, store.KindGitvelo:
 		return true
 	}
 	return false
 }
 
-// ReconcileGateway binds the opencode gateway listener if it is not bound
-// yet. Called at serve startup and by the card handlers. The listener
-// stays bound for the whole serve lifetime: when opencode is not running
-// the gateway answers a stopped page (or a login redirect), so a stale tab
-// never lands on a connection-refused blank page.
+// ReconcileGateway binds the opencode and gitvelo gateway listeners if they
+// are not bound yet. Called at serve startup and by the card handlers. The
+// listeners stay bound for the whole serve lifetime: when the app is not
+// running the gateway answers a stopped page (or a login redirect), so a
+// stale tab never lands on a connection-refused blank page.
 func (s *Service) ReconcileGateway() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.reconcileGatewayLocked()
 }
 
-// Shutdown releases the gateway listener. It is used by tests; a running
+// Shutdown releases the gateway listeners. It is used by tests; a running
 // serve exits without needing it.
 func (s *Service) Shutdown() {
 	s.mu.Lock()
@@ -234,14 +273,24 @@ func (s *Service) Shutdown() {
 	s.gw.Stop()
 	s.GatewayPort = 0
 	s.gwWanted = 0
+	s.gv.Stop()
+	s.GitveloGatewayPort = 0
+	s.gvWanted = 0
 }
 
-// reconcileGatewayLocked binds the gateway if it is not bound, and rebinds
-// it when the configured port changed while no opencode instance was using
-// the current listener. A running opencode card keeps the bound port until
-// it is restarted, so changing the port never drops a live session.
+// reconcileGatewayLocked binds each gateway if it is not bound, and rebinds
+// it when the configured port changed while no instance of that app was
+// using the current listener. A running card keeps the bound port until it
+// is restarted, so changing the port never drops a live session.
 // Caller holds s.mu.
 func (s *Service) reconcileGatewayLocked() {
+	s.reconcileOpencodeGatewayLocked()
+	s.reconcileGitveloGatewayLocked()
+}
+
+// reconcileOpencodeGatewayLocked is the opencode half of
+// reconcileGatewayLocked. Caller holds s.mu.
+func (s *Service) reconcileOpencodeGatewayLocked() {
 	if s.GatewayHandler == nil {
 		return
 	}
@@ -261,6 +310,31 @@ func (s *Service) reconcileGatewayLocked() {
 	s.GatewayPort, s.gwWanted = p, want
 	if want > 0 && p != want {
 		log.Printf("gateway: port %d in use, using %d instead", want, p)
+	}
+}
+
+// reconcileGitveloGatewayLocked is the gitvelo half of
+// reconcileGatewayLocked. Caller holds s.mu.
+func (s *Service) reconcileGitveloGatewayLocked() {
+	if s.GitveloGatewayHandler == nil {
+		return
+	}
+	want := s.Config.Gitvelo.GatewayPort
+	if s.gv.Port() != 0 {
+		if s.gvWanted == want || s.gitveloRunningLocked() {
+			return
+		}
+		s.gv.Stop()
+		s.GitveloGatewayPort = 0
+	}
+	p, err := s.gv.Start(s.Config.Hostname, want, s.GitveloGatewayHandler())
+	if err != nil {
+		log.Printf("gitvelo gateway: %v", err)
+		return
+	}
+	s.GitveloGatewayPort, s.gvWanted = p, want
+	if want > 0 && p != want {
+		log.Printf("gitvelo gateway: port %d in use, using %d instead", want, p)
 	}
 }
 
@@ -329,8 +403,8 @@ func (s *Service) view(c store.Card, reqHost string) CardView {
 // network address is configured it is used as-is (it may carry its own
 // port); otherwise the host mirrors how the visitor reached narthex (LAN
 // access) or falls back to loopback. The proxy-capable kinds (mdbook,
-// emulatorjs, opencode) return the same-origin proxy path when proxy is on
-// and their direct port URL otherwise; the VS Code-family kinds append their
+// emulatorjs, opencode, gitvelo) return the proxy URL when proxy is on and
+// their direct port URL otherwise; the VS Code-family kinds append their
 // connection token (`?tkn=`) because the server answers 403 without it.
 func (s *Service) instanceURL(reqHost, kind string, port int, proxy bool) string {
 	if kind == store.KindMdbook && proxy {
@@ -347,6 +421,17 @@ func (s *Service) instanceURL(reqHost, kind string, port int, proxy bool) string
 	}
 	if kind == store.KindOpencode && proxy && s.GatewayPort > 0 {
 		port = s.GatewayPort
+	}
+	if kind == store.KindGitvelo && proxy {
+		// The gitvelo gateway binds the dashboard listen address, not
+		// Gitvelo.Hostname (which only shapes the direct-mode server), so
+		// the "Open" URL follows the dashboard's reachability. Without a
+		// bound gateway there is no reachable URL: proxy mode binds the
+		// child to loopback, so its direct port is not a fallback.
+		if s.GitveloGatewayPort == 0 {
+			return ""
+		}
+		return s.baseURLForHost(reqHost, s.hostForListen(s.Config.Hostname, reqHost), s.GitveloGatewayPort)
 	}
 	base := s.baseURL(reqHost, kind, port)
 	if token := s.codeToken(kind); token != "" {
@@ -371,6 +456,11 @@ func (s *Service) directURL(reqHost, kind string, port int) string {
 // baseURL assembles a card base URL from the internal address (when set)
 // or the request host, following the app's listen address rules.
 func (s *Service) baseURL(reqHost, kind string, port int) string {
+	return s.baseURLForHost(reqHost, s.instanceHost(reqHost, kind), port)
+}
+
+// baseURLForHost is baseURL with an already resolved visitor-facing host.
+func (s *Service) baseURLForHost(reqHost, host string, port int) string {
 	if addr := strings.TrimSpace(s.Config.InternalAddress); addr != "" {
 		addr = strings.TrimPrefix(addr, "http://")
 		addr = strings.TrimPrefix(addr, "https://")
@@ -380,7 +470,7 @@ func (s *Service) baseURL(reqHost, kind string, port int) string {
 		}
 		return fmt.Sprintf("http://%s:%d/", addr, port)
 	}
-	return fmt.Sprintf("http://%s:%d/", s.instanceHost(reqHost, kind), port)
+	return fmt.Sprintf("http://%s:%d/", host, port)
 }
 
 // browserHosts lists the browser-side hosts a directly-opened card (one
@@ -430,12 +520,19 @@ func (s *Service) codeToken(kind string) string {
 // kind binds a non-loopback address (LAN access), links are built from
 // the visitor's request host; loopback-only kinds use 127.0.0.1.
 func (s *Service) instanceHost(reqHost string, kind string) string {
+	return s.hostForListen(s.listenHost(kind), reqHost)
+}
+
+// listenHost returns the configured listen address of a kind's server.
+func (s *Service) listenHost(kind string) string {
 	host := s.Config.ComfyUI.Hostname
 	switch kind {
 	case store.KindOpencode:
 		host = s.Config.Opencode.Hostname
 	case store.KindMdbook:
 		host = s.Config.Mdbook.Hostname
+	case store.KindGitvelo:
+		host = s.Config.Gitvelo.Hostname
 	case store.KindVSCode:
 		host = s.Config.Vscode.Hostname
 	case store.KindVSCodium:
@@ -445,7 +542,14 @@ func (s *Service) instanceHost(reqHost string, kind string) string {
 	case store.KindEmulatorJS:
 		host = s.Config.EmulatorJS.Hostname
 	}
-	if !IsLoopback(host) && reqHost != "" {
+	return host
+}
+
+// hostForListen resolves the visitor-facing host for a listener bound to
+// listenHost: a non-loopback bind mirrors the request host (LAN access),
+// a loopback bind uses 127.0.0.1.
+func (s *Service) hostForListen(listenHost, reqHost string) string {
+	if !IsLoopback(listenHost) && reqHost != "" {
 		if hostname, _, err := net.SplitHostPort(reqHost); err == nil {
 			return strings.Trim(hostname, "[]")
 		}
@@ -673,6 +777,8 @@ func (s *Service) HandleSettings(w http.ResponseWriter, r *http.Request) {
 		Slogan          *string `json:"slogan"`
 		InternalAddress *string `json:"internalAddress"`
 		GatewayPort     *int    `json:"gatewayPort"`
+		// GitveloGatewayPort is the fixed gateway port for the gitvelo card.
+		GitveloGatewayPort *int `json:"gitveloGatewayPort"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "err.invalidRequest")
@@ -726,6 +832,19 @@ func (s *Service) HandleSettings(w http.ResponseWriter, r *http.Request) {
 			gatewayChanged = true
 		}
 	}
+	if req.GitveloGatewayPort != nil {
+		p := *req.GitveloGatewayPort
+		if p < 1 || p > 65535 || p == s.Config.Port {
+			s.writeError(w, http.StatusBadRequest, "err.invalidGatewayPort")
+			return
+		}
+		if p != s.Config.Gitvelo.GatewayPort {
+			// Same semantics as the opencode gateway port: a running
+			// gitvelo card keeps the bound port until it is restarted.
+			s.Config.Gitvelo.GatewayPort = p
+			gatewayChanged = true
+		}
+	}
 	if err := store.SaveConfig(filepath.Join(s.Dir, store.ConfigFile), s.Config); err != nil {
 		s.writeError(w, http.StatusInternalServerError, "err.saveFailed", err.Error())
 		return
@@ -734,11 +853,12 @@ func (s *Service) HandleSettings(w http.ResponseWriter, r *http.Request) {
 		s.reconcileGatewayLocked()
 	}
 	WriteJSON(w, http.StatusOK, map[string]any{
-		"language":        s.Config.Language,
-		"pageBackground":  s.Config.PageBackground,
-		"slogan":          s.sloganValue(),
-		"internalAddress": s.Config.InternalAddress,
-		"gatewayPort":     s.Config.Opencode.GatewayPort,
+		"language":           s.Config.Language,
+		"pageBackground":     s.Config.PageBackground,
+		"slogan":             s.sloganValue(),
+		"internalAddress":    s.Config.InternalAddress,
+		"gatewayPort":        s.Config.Opencode.GatewayPort,
+		"gitveloGatewayPort": s.Config.Gitvelo.GatewayPort,
 	})
 }
 
@@ -793,6 +913,10 @@ func (s *Service) appUnavailableReason(kind string) string {
 		if s.VscodeBin() == "" {
 			return "add.reason.notInstalled"
 		}
+	case store.KindGitvelo:
+		if s.GitveloBin() == "" {
+			return "add.reason.notInstalled"
+		}
 	case store.KindVSCodium:
 		if s.VscodiumBin() == "" {
 			return "add.reason.notInstalled"
@@ -818,22 +942,24 @@ func (s *Service) HandleMeta(w http.ResponseWriter, r *http.Request) {
 		store.KindComfyUI:    s.appInfoFor(store.KindComfyUI),
 		store.KindOpencode:   s.appInfoFor(store.KindOpencode),
 		store.KindMdbook:     s.appInfoFor(store.KindMdbook),
+		store.KindGitvelo:    s.appInfoFor(store.KindGitvelo),
 		store.KindVSCode:     s.appInfoFor(store.KindVSCode),
 		store.KindVSCodium:   s.appInfoFor(store.KindVSCodium),
 		store.KindWetty:      s.appInfoFor(store.KindWetty),
 		store.KindEmulatorJS: s.appInfoFor(store.KindEmulatorJS),
 	}
 	WriteJSON(w, http.StatusOK, map[string]any{
-		"icons":           assetNames("assets/icons", ".svg"),
-		"backgrounds":     s.backgrounds(),
-		"apps":            apps,
-		"lang":            s.Config.Language,
-		"pageBackground":  s.Config.PageBackground,
-		"slogan":          s.sloganValue(),
-		"username":        s.Username,
-		"internalAddress": s.Config.InternalAddress,
-		"lanUrls":         s.lanURLs(),
-		"gatewayPort":     s.Config.Opencode.GatewayPort,
+		"icons":              assetNames("assets/icons", ".svg"),
+		"backgrounds":        s.backgrounds(),
+		"apps":               apps,
+		"lang":               s.Config.Language,
+		"pageBackground":     s.Config.PageBackground,
+		"slogan":             s.sloganValue(),
+		"username":           s.Username,
+		"internalAddress":    s.Config.InternalAddress,
+		"lanUrls":            s.lanURLs(),
+		"gatewayPort":        s.Config.Opencode.GatewayPort,
+		"gitveloGatewayPort": s.Config.Gitvelo.GatewayPort,
 	})
 }
 

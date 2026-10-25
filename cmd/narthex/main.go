@@ -188,6 +188,8 @@ func cmdServe(args []string) error {
 	backend.OpencodePassword = cfg.Opencode.Password
 	backend.MdbookHostname = cfg.Mdbook.Hostname
 	backend.MdbookPortRange = cfg.Mdbook.PortRange
+	backend.GitveloHostname = cfg.Gitvelo.Hostname
+	backend.GitveloPortRange = cfg.Gitvelo.PortRange
 	backend.VscodeHostname = cfg.Vscode.Hostname
 	backend.VscodePortRange = cfg.Vscode.PortRange
 	backend.VscodeConnectionToken = cfg.Vscode.ConnectionToken
@@ -230,6 +232,7 @@ func cmdServe(args []string) error {
 	}
 	srv := server.New(cfg, svc)
 	svc.GatewayHandler = srv.GatewayHandler
+	svc.GitveloGatewayHandler = srv.GitveloGatewayHandler
 
 	addr := net.JoinHostPort(cfg.Hostname, strconv.Itoa(cfg.Port))
 	if conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond); err == nil {
@@ -262,6 +265,9 @@ func cmdServe(args []string) error {
 	if svc.GatewayPort > 0 {
 		fmt.Println(L("msg.opencodeGateway", displayAddr(cfg.Hostname, svc.GatewayPort)))
 	}
+	if svc.GitveloGatewayPort > 0 {
+		fmt.Println(L("msg.gitveloGateway", displayAddr(cfg.Hostname, svc.GitveloGatewayPort)))
+	}
 	return http.ListenAndServe(addr, srv.Handler())
 }
 
@@ -277,6 +283,9 @@ func detectedApps(cfg *store.Config) []string {
 	}
 	if procman.DetectMdbook() != "" && len(cfg.Mdbook.Dirs) > 0 {
 		labels = append(labels, "MdBook")
+	}
+	if procman.DetectGitvelo() != "" {
+		labels = append(labels, "GitVelo")
 	}
 	if procman.DetectVSCode() != "" {
 		labels = append(labels, "VS Code")

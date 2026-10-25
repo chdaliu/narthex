@@ -345,3 +345,84 @@ func freePort(t *testing.T) int {
 	ln.Close()
 	return p
 }
+
+func TestGitveloRedirectsUnauthenticated(t *testing.T) {
+	h := gateway.GitveloHandler(testConfig(), func() i18n.Lang { return i18n.EN },
+		func() (string, bool) { return "", false })
+
+	res := doGet(t, h, "", "192.168.1.9:26101")
+	if res.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302", res.StatusCode)
+	}
+	if loc := res.Header.Get("Location"); loc != "http://192.168.1.9:9090/" {
+		t.Fatalf("redirect = %q", loc)
+	}
+}
+
+func TestGitveloStoppedPage(t *testing.T) {
+	h := gateway.GitveloHandler(testConfig(), func() i18n.Lang { return i18n.ZHCN },
+		func() (string, bool) { return "", false })
+
+	res := doGet(t, h, sessionCookie(), "127.0.0.1:26101")
+	if res.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", res.StatusCode)
+	}
+	body, _ := io.ReadAll(res.Body)
+	if !strings.Contains(string(body), "GitVelo 未运行") {
+		t.Fatalf("stopped page should be localized: %s", body)
+	}
+	if !strings.Contains(string(body), "http://127.0.0.1:9090/") {
+		t.Fatalf("stopped page missing dashboard link: %s", body)
+	}
+}
+
+func TestGitveloProxiesAndStripsCookie(t *testing.T) {
+	var gotMethod, gotBody, gotCookie, gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotMethod, gotBody, gotPath = r.Method, string(b), r.URL.Path
+		gotCookie = r.Header.Get("Cookie")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	h := gateway.GitveloHandler(testConfig(), func() i18n.Lang { return i18n.EN },
+		func() (string, bool) { return hostOf(upstream), true })
+
+	req := httptest.NewRequest("POST", "http://127.0.0.1:26101/api/rpc", strings.NewReader(`{"method":"repo.list"}`))
+	req.Host = "127.0.0.1:26101"
+	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: sessionCookie()})
+	req.Header.Set("Cookie", auth.SessionCookieName+"="+sessionCookie())
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	res := rec.Result()
+
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", res.StatusCode)
+	}
+	if gotMethod != "POST" || gotPath != "/api/rpc" || gotBody != `{"method":"repo.list"}` {
+		t.Fatalf("upstream got %s %s body=%q", gotMethod, gotPath, gotBody)
+	}
+	if gotCookie != "" {
+		t.Fatalf("narthex session cookie leaked upstream: %q", gotCookie)
+	}
+	body, _ := io.ReadAll(res.Body)
+	if string(body) != `{"ok":true}` {
+		t.Fatalf("body = %q", body)
+	}
+}
+
+func TestGitveloBadGatewayWhenUpstreamDown(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	addr := hostOf(upstream)
+	upstream.Close()
+
+	h := gateway.GitveloHandler(testConfig(), func() i18n.Lang { return i18n.EN },
+		func() (string, bool) { return addr, true })
+
+	res := doGet(t, h, sessionCookie(), "127.0.0.1:26101")
+	if res.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", res.StatusCode)
+	}
+}

@@ -791,6 +791,7 @@ function kindIcon(kind) {
   switch (kind) {
     case "opencode": return "braces";
     case "mdbook": return "book-open";
+    case "gitvelo": return "git-branch";
     case "vscode": return "code";
     case "vscodium": return "code";
     case "wetty": return "terminal";
@@ -800,12 +801,12 @@ function kindIcon(kind) {
 }
 
 // ALL_KINDS is the canonical order of the app types.
-const ALL_KINDS = ["comfyui", "opencode", "mdbook", "vscode", "vscodium", "wetty", "emulatorjs"];
+const ALL_KINDS = ["comfyui", "opencode", "mdbook", "gitvelo", "vscode", "vscodium", "wetty", "emulatorjs"];
 
 // PROXY_KINDS are the kinds whose "Open" URL can be either the same-origin
 // narthex reverse proxy or the app's own direct URL; their card settings
 // show a reverse-proxy toggle.
-const PROXY_KINDS = ["mdbook", "emulatorjs", "opencode"];
+const PROXY_KINDS = ["mdbook", "emulatorjs", "opencode", "gitvelo"];
 
 // isProxyKind reports whether a kind supports the reverse-proxy toggle.
 function isProxyKind(kind) {
@@ -1091,11 +1092,11 @@ async function openEditModal(card) {
       <div class="field-label">${t("modal.bgLabel")}</div>
       <div id="edit-bg-grid"></div>
     </div>
-    ${card.kind === "opencode" ? `
+    ${card.kind === "opencode" || card.kind === "gitvelo" ? `
     <div>
-      <div class="field-label">${t("modal.gatewayPortLabel")}</div>
-      <input type="number" id="edit-gateway-port" min="1" max="65535" placeholder="4399" style="margin-top:6px">
-      <div class="muted" id="edit-gateway-port-hint" style="font-size:12px;margin-top:4px">${t("modal.gatewayPortHint")}</div>
+      <div class="field-label">${card.kind === "gitvelo" ? t("modal.gitveloGatewayPortLabel") : t("modal.gatewayPortLabel")}</div>
+      <input type="number" id="edit-gateway-port" min="1" max="65535" placeholder="${card.kind === "gitvelo" ? "26101" : "4399"}" style="margin-top:6px">
+      <div class="muted" id="edit-gateway-port-hint" style="font-size:12px;margin-top:4px">${card.kind === "gitvelo" ? t("modal.gitveloGatewayPortHint") : t("modal.gatewayPortHint")}</div>
     </div>` : ""}
     ${isProxyKind(card.kind) ? `
     <div>
@@ -1113,17 +1114,24 @@ async function openEditModal(card) {
   const iconPicker = iconPickerGrid(card.icon);
   $("#edit-icon-grid", modal).appendChild(iconPicker.el);
   const bgPicker = bgPickerGrid($("#edit-bg-grid", modal), card.background);
-  const gwPortInput = card.kind === "opencode" ? $("#edit-gateway-port", modal) : null;
+  const isGitvelo = card.kind === "gitvelo";
+  const gwPortInput = card.kind === "opencode" || isGitvelo ? $("#edit-gateway-port", modal) : null;
   if (gwPortInput) {
-    gwPortInput.value = meta.gatewayPort || "";
+    gwPortInput.value = (isGitvelo ? meta.gitveloGatewayPort : meta.gatewayPort) || "";
     if (card.running) {
-      $("#edit-gateway-port-hint", modal).textContent = t("modal.gatewayPortRunningHint");
+      $("#edit-gateway-port-hint", modal).textContent = t(isGitvelo ? "modal.gitveloGatewayPortRunningHint" : "modal.gatewayPortRunningHint");
     }
   }
   const proxyInput = isProxyKind(card.kind) ? $("#edit-proxy", modal) : null;
   if (proxyInput) {
     // Missing/false disableProxy means the proxy is on by default.
     proxyInput.checked = !card.disableProxy;
+    // gitvelo's switch changes how its server is spawned (--no-auth on
+    // loopback vs its own login), so it can only be flipped while stopped.
+    if (isGitvelo && card.running) {
+      proxyInput.disabled = true;
+      $("#edit-proxy-hint", modal).textContent = t("modal.proxyGitveloRunningHint");
+    }
   }
 
   $("#btn-cancel", modal).addEventListener("click", closeModal);
@@ -1136,12 +1144,15 @@ async function openEditModal(card) {
     }
     btn.disabled = true;
     try {
-      if (gwPortInput && gwValue !== meta.gatewayPort) {
+      const gwMeta = isGitvelo ? meta.gitveloGatewayPort : meta.gatewayPort;
+      if (gwPortInput && gwValue !== gwMeta) {
+        const body = isGitvelo ? { gitveloGatewayPort: gwValue } : { gatewayPort: gwValue };
         const res = await api("/api/settings", {
           method: "POST",
-          body: JSON.stringify({ gatewayPort: gwValue }),
+          body: JSON.stringify(body),
         });
-        meta.gatewayPort = res.gatewayPort;
+        if (isGitvelo) meta.gitveloGatewayPort = res.gitveloGatewayPort;
+        else meta.gatewayPort = res.gatewayPort;
       }
       await api(`/api/cards/${card.id}`, {
         method: "PATCH",

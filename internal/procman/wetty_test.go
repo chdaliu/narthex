@@ -80,7 +80,7 @@ func TestWettyLifecycle(t *testing.T) {
 		LogDir:         logDir,
 	}
 
-	pid, port, err := m.Start("wetty", t.TempDir(), "wt1", []string{"192.168.1.20", "http://10.0.0.5:8080", "127.0.0.1"})
+	pid, port, err := m.Start("wetty", t.TempDir(), "wt1", []string{"192.168.1.20", "http://10.0.0.5:8080", "127.0.0.1"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestWettyStartError(t *testing.T) {
 		WettyPortRange: [2]int{4980, 4999},
 		LogDir:         t.TempDir(),
 	}
-	if _, _, err := m.Start("wetty", t.TempDir(), "x", nil); err == nil {
+	if _, _, err := m.Start("wetty", t.TempDir(), "x", nil, false); err == nil {
 		t.Fatal("start without a wetty binary should error")
 	}
 }
@@ -284,7 +284,7 @@ func waitDead(t *testing.T, pid int) {
 // at it, and stops it together with the card.
 func TestWettyManagedSSHD(t *testing.T) {
 	m, wettyDump, sshdDump := managedWettyManager(t)
-	pid, port, err := m.Start("wetty", t.TempDir(), "wtm", []string{"192.168.1.20"})
+	pid, port, err := m.Start("wetty", t.TempDir(), "wtm", []string{"192.168.1.20"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +344,7 @@ func TestWettyManagedSSHD(t *testing.T) {
 // A wetty crash (not an explicit stop) must take the private sshd down too.
 func TestWettyManagedSSHDDiesWithWetty(t *testing.T) {
 	m, _, _ := managedWettyManager(t)
-	pid, _, err := m.Start("wetty", t.TempDir(), "wtc", nil)
+	pid, _, err := m.Start("wetty", t.TempDir(), "wtc", nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +391,7 @@ func TestWettySystemModeSkipsManagedSSHD(t *testing.T) {
 		WettySSHDDir:   t.TempDir(),
 		LogDir:         t.TempDir(),
 	}
-	pid, _, err := m.Start("wetty", t.TempDir(), "wts", nil)
+	pid, _, err := m.Start("wetty", t.TempDir(), "wts", nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -467,7 +467,7 @@ func TestWettyManagedRejectsOtherUser(t *testing.T) {
 		WettySSHDDir:      t.TempDir(),
 		LogDir:            t.TempDir(),
 	}
-	if _, _, err := m.Start("wetty", t.TempDir(), "wtu", nil); err == nil || !strings.Contains(err.Error(), "cannot log in") {
+	if _, _, err := m.Start("wetty", t.TempDir(), "wtu", nil, false); err == nil || !strings.Contains(err.Error(), "cannot log in") {
 		t.Fatalf("start with another sshUser should fail, got %v", err)
 	}
 }
@@ -498,7 +498,7 @@ func TestWettyManagedRealSSHD(t *testing.T) {
 		WettySSHDDir:      t.TempDir(),
 		LogDir:            t.TempDir(),
 	}
-	pid, _, err := m.Start("wetty", t.TempDir(), "wtr", nil)
+	pid, _, err := m.Start("wetty", t.TempDir(), "wtr", nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}

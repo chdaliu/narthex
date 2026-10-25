@@ -99,6 +99,14 @@ func (s *Server) GatewayHandler() http.Handler {
 	})
 }
 
+// GitveloGatewayHandler returns the gitvelo reverse-proxy handler. Like
+// opencode it runs on a dedicated listener, because GitVelo's SPA uses
+// root-absolute paths and its cookie login cannot be injected by narthex;
+// in proxy mode the child runs with --no-auth on loopback instead.
+func (s *Server) GitveloGatewayHandler() http.Handler {
+	return gateway.GitveloHandler(s.cfg, s.svc.Lang, s.svc.GitveloGatewayTarget)
+}
+
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := auth.Verify(s.cfg.SessionSecret, cookieValue(r)); !ok {

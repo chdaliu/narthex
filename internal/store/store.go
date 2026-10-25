@@ -36,6 +36,16 @@ const (
 	// KindMdbook launches an mdBook documentation server; the card points
 	// at a book project (a directory containing book.toml).
 	KindMdbook = "mdbook"
+	// KindGitvelo launches the GitVelo web service. The GitVelo login is
+	// cookie-based, so narthex cannot inject it; instead the server runs
+	// with --no-auth on loopback behind the narthex gateway when the card
+	// uses the reverse proxy (the default), and with its own login when
+	// opened directly (see procman.startGitvelo).
+	KindGitvelo = "gitvelo"
+	// DefaultGitveloGatewayPort is the fixed port the narthex gitvelo
+	// reverse-proxy gateway binds by default, leaving GitVelo's own
+	// conventional web port (26100) to manually started instances.
+	DefaultGitveloGatewayPort = 26101
 	// KindVSCode launches the VS Code web server (`code serve-web`).
 	KindVSCode = "vscode"
 	// KindVSCodium launches the VSCodium web server (`codium serve-web`).
@@ -90,6 +100,22 @@ type MdbookConfig struct {
 	// containing book.toml) are recognized and new books are created. The
 	// mdbook card kind is hidden while this list is empty.
 	Dirs []string `json:"dirs,omitempty"`
+}
+
+// GitveloConfig controls how the GitVelo web server is spawned.
+type GitveloConfig struct {
+	// Hostname is the listen address of the GitVelo server when the card
+	// opens it directly (proxy off). 0.0.0.0 makes it reachable from other
+	// devices on the LAN. With the reverse proxy on the server always
+	// binds 127.0.0.1 and runs with --no-auth, so the port is never
+	// exposed unauthenticated.
+	Hostname string `json:"hostname"`
+	// PortRange is the range a free port is picked from.
+	PortRange [2]int `json:"portRange"`
+	// GatewayPort is the fixed local port the narthex reverse-proxy
+	// gateway for gitvelo binds, so the card "Open" URL stays stable
+	// across restarts. When it is occupied a free port is picked instead.
+	GatewayPort int `json:"gatewayPort,omitempty"`
 }
 
 // VscodeConfig controls how the VS Code web server is spawned.
@@ -209,6 +235,8 @@ type Config struct {
 	Opencode OpencodeConfig `json:"opencode"`
 	// Mdbook controls the mdBook documentation server card.
 	Mdbook MdbookConfig `json:"mdbook"`
+	// Gitvelo controls the GitVelo web service card.
+	Gitvelo GitveloConfig `json:"gitvelo"`
 	// Vscode controls the VS Code web server card.
 	Vscode VscodeConfig `json:"vscode"`
 	// Vscodium controls the VSCodium web server card.
@@ -257,6 +285,11 @@ func DefaultConfig() *Config {
 			Hostname:  "0.0.0.0",
 			PortRange: [2]int{4500, 4699},
 			Dirs:      []string{},
+		},
+		Gitvelo: GitveloConfig{
+			Hostname:    "0.0.0.0",
+			PortRange:   [2]int{5400, 5599},
+			GatewayPort: DefaultGitveloGatewayPort,
 		},
 		Vscode: VscodeConfig{
 			Hostname:  "0.0.0.0",
@@ -360,6 +393,15 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if c.Mdbook.PortRange == [2]int{0, 0} {
 		c.Mdbook.PortRange = def.Mdbook.PortRange
+	}
+	if c.Gitvelo.Hostname == "" {
+		c.Gitvelo.Hostname = def.Gitvelo.Hostname
+	}
+	if c.Gitvelo.PortRange == [2]int{0, 0} {
+		c.Gitvelo.PortRange = def.Gitvelo.PortRange
+	}
+	if c.Gitvelo.GatewayPort == 0 {
+		c.Gitvelo.GatewayPort = def.Gitvelo.GatewayPort
 	}
 	if c.Vscode.Hostname == "" {
 		c.Vscode.Hostname = def.Vscode.Hostname
@@ -472,7 +514,7 @@ func LoadState(path string) (*State, error) {
 	seen := map[string]bool{}
 	kept := s.Cards[:0]
 	for _, c := range s.Cards {
-		if c.Kind != KindComfyUI && c.Kind != KindOpencode && c.Kind != KindMdbook && c.Kind != KindVSCode && c.Kind != KindVSCodium && c.Kind != KindWetty && c.Kind != KindEmulatorJS {
+		if c.Kind != KindComfyUI && c.Kind != KindOpencode && c.Kind != KindMdbook && c.Kind != KindGitvelo && c.Kind != KindVSCode && c.Kind != KindVSCodium && c.Kind != KindWetty && c.Kind != KindEmulatorJS {
 			continue
 		}
 		if seen[c.Kind] {

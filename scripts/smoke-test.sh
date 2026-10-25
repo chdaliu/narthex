@@ -80,6 +80,24 @@ exec python3 -m http.server "$port" --bind 127.0.0.1
 SHIM
 chmod +x "$TMP/bin/opencode"
 
+# Fake `gitvelo` CLI: mimics `gitvelo serve ...` by serving HTTP on the port
+# given via `--port`; dumps its argv so the test can assert the proxy/direct
+# startup shape.
+cat > "$TMP/bin/gitvelo" <<'SHIM'
+#!/bin/sh
+if [ -n "$GV_ARGS_FILE" ]; then
+  printf '%s\n' "$@" > "$GV_ARGS_FILE"
+fi
+port=5400
+prev=
+for a in "$@"; do
+  if [ "$prev" = "--port" ]; then port=$a; fi
+  prev=$a
+done
+exec python3 -m http.server "$port" --bind 127.0.0.1
+SHIM
+chmod +x "$TMP/bin/gitvelo"
+
 # Fake `mdbook` CLI: `serve` serves HTTP on the port given via `--port`;
 # `init <name>` writes a minimal book skeleton (book.toml + src).
 cat > "$TMP/bin/mdbook" <<'SHIM'
@@ -247,7 +265,7 @@ kill "$AUTO_PID" 2>/dev/null || true
 wait "$AUTO_PID" 2>/dev/null || true
 
 echo "== serve =="
-OC_ENV_FILE="$TMP/opencode-env.txt" PATH="$TMP/bin:$PATH" NARTHEX_COMFY_APP_DIR="$COMFYAPP" NARTHEX_COMFY_DESKTOP_DIR="$COMFYDESK" NARTHEX_MDBOOK_BIN="$TMP/bin/mdbook" NARTHEX_VSCODE_BIN="$TMP/bin/code" NARTHEX_VSCODIUM_BIN="$TMP/bin/codium" NARTHEX_WETTY_BIN="$TMP/bin/wetty" NARTHEX_WETTY_ARGS_FILE="$TMP/wetty-args.txt" NARTHEX_SSHD_BIN="$TMP/bin/sshd" NARTHEX_SSHD_ARGS_FILE="$TMP/sshd-args.txt" "$BIN" serve --config "$CFG" --port "$PORT" >"$TMP/server.log" 2>&1 &
+OC_ENV_FILE="$TMP/opencode-env.txt" GV_ARGS_FILE="$TMP/gitvelo-args.txt" PATH="$TMP/bin:$PATH" NARTHEX_COMFY_APP_DIR="$COMFYAPP" NARTHEX_COMFY_DESKTOP_DIR="$COMFYDESK" NARTHEX_MDBOOK_BIN="$TMP/bin/mdbook" NARTHEX_VSCODE_BIN="$TMP/bin/code" NARTHEX_VSCODIUM_BIN="$TMP/bin/codium" NARTHEX_WETTY_BIN="$TMP/bin/wetty" NARTHEX_WETTY_ARGS_FILE="$TMP/wetty-args.txt" NARTHEX_SSHD_BIN="$TMP/bin/sshd" NARTHEX_SSHD_ARGS_FILE="$TMP/sshd-args.txt" "$BIN" serve --config "$CFG" --port "$PORT" >"$TMP/server.log" 2>&1 &
 SRV_PID=$!
 for _ in $(seq 1 40); do
   curl -fsS "http://127.0.0.1:$PORT/api/session" >/dev/null 2>&1 && break
@@ -281,6 +299,8 @@ assert apps['opencode']['installed'] is True, apps
 assert apps['opencode']['label'] == 'OpenCode', apps
 assert apps['mdbook']['installed'] is True, apps
 assert apps['mdbook']['label'] == 'MdBook', apps
+assert apps['gitvelo']['installed'] is True, apps
+assert apps['gitvelo']['label'] == 'GitVelo', apps
 assert apps['vscode']['installed'] is True, apps
 assert apps['vscode']['label'] == 'VS Code', apps
 assert apps['vscodium']['installed'] is True, apps
@@ -433,6 +453,73 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" "$GW_URL")
 body=$(curl -s -b "$COOKIE" "$GW_URL")
 echo "$body" | grep -q "http://127.0.0.1:$PORT/" || fail "stopped page missing dashboard link: $body"
 curl -fsS -b "$COOKIE" -X DELETE "http://127.0.0.1:$PORT/api/cards/$ID" >/dev/null || fail "opencode delete failed"
+
+echo "== gitvelo card =="
+GV_PORT=$(curl -fsS -b "$COOKIE" "http://127.0.0.1:$PORT/api/meta" | python3 -c 'import sys,json;print(json.load(sys.stdin)["gitveloGatewayPort"])')
+[ -n "$GV_PORT" ] || fail "meta should expose gitveloGatewayPort"
+GV_URL="http://127.0.0.1:$GV_PORT/"
+CARD=$(curl -fsS -b "$COOKIE" -H 'Content-Type: application/json' \
+  -d '{"kind":"gitvelo"}' "http://127.0.0.1:$PORT/api/cards")
+ID=$(python3 -c "import sys,json;print(json.loads(sys.argv[1])['id'])" "$CARD")
+[ -n "$ID" ] || fail "no gitvelo card id in response"
+echo "$CARD" | python3 -c 'import sys,json;c=json.load(sys.stdin);assert c["kind"]=="gitvelo" and c["icon"]=="git-branch" and c["name"]=="GitVelo",c'
+rm -f "$TMP/gitvelo-args.txt"
+curl -fsS -b "$COOKIE" -X POST "http://127.0.0.1:$PORT/api/cards/$ID/start" >/dev/null || fail "gitvelo start failed"
+RUN="no"
+for _ in $(seq 1 40); do
+  STATUS=$(curl -fsS -b "$COOKIE" "http://127.0.0.1:$PORT/api/cards")
+  RUN=$(echo "$STATUS" | python3 -c "import sys,json;c=[x for x in json.load(sys.stdin)['cards'] if x['id']=='$ID'][0];print('yes' if c['running'] and c['healthy'] else 'no')")
+  [ "$RUN" = "yes" ] && break
+  sleep 0.5
+done
+[ "$RUN" = "yes" ] || { echo "$STATUS"; fail "gitvelo did not become running"; }
+# Proxy mode (the default) runs the server with --no-auth on loopback and
+# points the "Open" URL at the narthex gateway.
+for _ in $(seq 1 20); do [ -s "$TMP/gitvelo-args.txt" ] && break; sleep 0.25; done
+GV_ARGS=$(tr '\n' ' ' < "$TMP/gitvelo-args.txt")
+echo "$GV_ARGS" | grep -q -- "--no-auth" || fail "proxy-mode gitvelo args missing --no-auth: $GV_ARGS"
+echo "$GV_ARGS" | grep -q -- "--host 127.0.0.1" || fail "proxy-mode gitvelo should bind loopback: $GV_ARGS"
+echo "$STATUS" | python3 -c "import sys,json;c=[x for x in json.load(sys.stdin)['cards'] if x['id']=='$ID'][0];assert c['url']=='$GV_URL',c"
+code=$(curl -s -o /dev/null -w '%{http_code}' "$GV_URL")
+[ "$code" = "302" ] || fail "unauthenticated gitvelo gateway should redirect, got $code"
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" "$GV_URL")
+[ "$code" = "200" ] || fail "authenticated gitvelo gateway should proxy, got $code"
+# The proxy switch changes how the server is spawned, so it is rejected
+# while the card runs.
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" -X PATCH -H 'Content-Type: application/json' \
+  -d '{"proxy":false}' "http://127.0.0.1:$PORT/api/cards/$ID")
+[ "$code" = "409" ] || fail "proxy toggle while running should be 409, got $code"
+curl -fsS -b "$COOKIE" -X POST "http://127.0.0.1:$PORT/api/cards/$ID/stop" >/dev/null || fail "gitvelo stop failed"
+# The gateway stays bound and serves a localized stopped page.
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" "$GV_URL")
+[ "$code" = "503" ] || fail "gitvelo gateway after stop should serve a stopped page, got $code"
+curl -s -b "$COOKIE" "$GV_URL" | grep -q "GitVelo" || fail "gitvelo stopped page missing app name"
+# Direct mode (proxy off): the server keeps its own login on the configured
+# address and the card opens its own port.
+curl -fsS -b "$COOKIE" -X PATCH -H 'Content-Type: application/json' \
+  -d '{"proxy":false}' "http://127.0.0.1:$PORT/api/cards/$ID" >/dev/null || fail "gitvelo proxy-off patch failed"
+rm -f "$TMP/gitvelo-args.txt"
+curl -fsS -b "$COOKIE" -X POST "http://127.0.0.1:$PORT/api/cards/$ID/start" >/dev/null || fail "gitvelo direct start failed"
+for _ in $(seq 1 40); do
+  STATUS=$(curl -fsS -b "$COOKIE" "http://127.0.0.1:$PORT/api/cards")
+  RUN=$(echo "$STATUS" | python3 -c "import sys,json;c=[x for x in json.load(sys.stdin)['cards'] if x['id']=='$ID'][0];print('yes' if c['running'] and c['healthy'] else 'no')")
+  [ "$RUN" = "yes" ] && break
+  sleep 0.5
+done
+[ "$RUN" = "yes" ] || { echo "$STATUS"; fail "gitvelo direct mode did not become running"; }
+for _ in $(seq 1 20); do [ -s "$TMP/gitvelo-args.txt" ] && break; sleep 0.25; done
+GV_ARGS=$(tr '\n' ' ' < "$TMP/gitvelo-args.txt")
+echo "$GV_ARGS" | grep -q -- "--no-auth" && fail "direct-mode gitvelo args must not contain --no-auth: $GV_ARGS"
+echo "$GV_ARGS" | grep -q -- "--host 0.0.0.0" || fail "direct-mode gitvelo should use the configured host: $GV_ARGS"
+echo "$STATUS" | python3 -c "
+import sys, json, re
+c = [x for x in json.load(sys.stdin)['cards'] if x['id'] == sys.argv[1]][0]
+m = re.search(r':(\d+)/', c['url'])
+assert m and 5400 <= int(m.group(1)) <= 5599, c" "$ID"
+curl -fsS -b "$COOKIE" -X POST "http://127.0.0.1:$PORT/api/cards/$ID/stop" >/dev/null || fail "gitvelo direct stop failed"
+curl -fsS -b "$COOKIE" -X PATCH -H 'Content-Type: application/json' \
+  -d '{"proxy":true}' "http://127.0.0.1:$PORT/api/cards/$ID" >/dev/null || fail "gitvelo proxy-on patch failed"
+curl -fsS -b "$COOKIE" -X DELETE "http://127.0.0.1:$PORT/api/cards/$ID" >/dev/null || fail "gitvelo delete failed"
 
 echo "== mdbook projects API =="
 curl -fsS -b "$COOKIE" "http://127.0.0.1:$PORT/api/mdbook/projects" | python3 -c "

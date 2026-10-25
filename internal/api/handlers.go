@@ -48,7 +48,7 @@ func (s *Service) HandleCreateCard(w http.ResponseWriter, r *http.Request) {
 	if kind == "" {
 		kind = store.KindComfyUI
 	}
-	if kind != store.KindComfyUI && kind != store.KindOpencode && kind != store.KindMdbook && kind != store.KindVSCode && kind != store.KindVSCodium && kind != store.KindWetty && kind != store.KindEmulatorJS {
+	if kind != store.KindComfyUI && kind != store.KindOpencode && kind != store.KindMdbook && kind != store.KindGitvelo && kind != store.KindVSCode && kind != store.KindVSCodium && kind != store.KindWetty && kind != store.KindEmulatorJS {
 		s.writeError(w, http.StatusBadRequest, "err.kindUnsupported", kind)
 		return
 	}
@@ -129,6 +129,14 @@ func (s *Service) HandlePatchCard(w http.ResponseWriter, r *http.Request) {
 	if req.Proxy != nil && proxyCapable(card.Kind) {
 		// A plain bool cannot distinguish "unset" from false, so the field
 		// is a pointer: only an explicit value flips the switch.
+		//
+		// gitvelo's proxy switch changes how the child server is spawned
+		// (--no-auth on loopback vs its own login on the configured
+		// address), so it cannot be applied to an already running process.
+		if card.Kind == store.KindGitvelo && card.DisableProxy != !*req.Proxy && s.Backend.Status(card.Kind, card.PID, card.Port).Alive {
+			s.writeError(w, http.StatusConflict, "err.gitveloProxyRunning")
+			return
+		}
 		card.DisableProxy = !*req.Proxy
 	}
 	if err := s.save(); err != nil {
@@ -231,7 +239,7 @@ func (s *Service) HandleStartCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dir := s.installDir(card.Kind, card.Dir)
-	pid, port, err := s.Backend.Start(card.Kind, dir, card.ID, s.browserHosts(r.Host))
+	pid, port, err := s.Backend.Start(card.Kind, dir, card.ID, s.browserHosts(r.Host), card.Kind == store.KindGitvelo && !card.DisableProxy)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "err.startFailed", err.Error())
 		return
@@ -293,6 +301,17 @@ func (s *Service) opencodeRunningLocked() bool {
 	return false
 }
 
+// gitveloRunningLocked reports whether the gitvelo card currently has a
+// live instance. Caller holds s.mu.
+func (s *Service) gitveloRunningLocked() bool {
+	for _, c := range s.State.Cards {
+		if c.Kind == store.KindGitvelo {
+			return s.Backend.Status(c.Kind, c.PID, c.Port).Alive
+		}
+	}
+	return false
+}
+
 // appInstalled reports whether the desktop app for kind is installed on
 // this machine with a usable install. comfyui additionally needs at least
 // one managed ComfyUI install (its code directory) to start a server;
@@ -306,6 +325,8 @@ func (s *Service) appInstalled(kind string) bool {
 		return s.OpencodeBin() != ""
 	case store.KindMdbook:
 		return s.MdbookBin() != "" && len(s.Config.Mdbook.Dirs) > 0
+	case store.KindGitvelo:
+		return s.GitveloBin() != ""
 	case store.KindVSCode:
 		return s.VscodeBin() != ""
 	case store.KindVSCodium:
@@ -335,6 +356,12 @@ func (s *Service) installDir(kind, cardDir string) string {
 	case store.KindEmulatorJS:
 		return cardDir
 	case store.KindOpencode, store.KindVSCode, store.KindVSCodium, store.KindWetty:
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+	case store.KindGitvelo:
+		// The GitVelo web service reads its repositories from the whole
+		// filesystem; start it from the user's home like the other CLIs.
 		if home, err := os.UserHomeDir(); err == nil {
 			return home
 		}
@@ -379,6 +406,8 @@ func kindLabel(kind string) string {
 		return "OpenCode"
 	case store.KindMdbook:
 		return "MdBook"
+	case store.KindGitvelo:
+		return "GitVelo"
 	case store.KindVSCode:
 		return "VS Code"
 	case store.KindVSCodium:
@@ -411,6 +440,8 @@ func defaultIcon(icon, kind string) string {
 			return "terminal"
 		case store.KindMdbook:
 			return "book-open"
+		case store.KindGitvelo:
+			return "git-branch"
 		case store.KindVSCode:
 			return "code"
 		case store.KindVSCodium:

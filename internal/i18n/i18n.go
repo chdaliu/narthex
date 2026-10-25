@@ -323,6 +323,26 @@ autostart 參數:
 		ZHCN: "EmulatorJS 服务已停止,正在返回 Narthex 面板...",
 		ZHTW: "EmulatorJS 服務已停止,正在返回 Narthex 面板...",
 	},
+	"gateway.gitveloStoppedTitle": {
+		EN:   "GitVelo is not running",
+		ZHCN: "GitVelo 未运行",
+		ZHTW: "GitVelo 未執行",
+	},
+	"gateway.gitveloStoppedBody": {
+		EN:   "The GitVelo service has stopped. Returning to the Narthex dashboard...",
+		ZHCN: "GitVelo 服务已停止,正在返回 Narthex 面板...",
+		ZHTW: "GitVelo 服務已停止,正在返回 Narthex 面板...",
+	},
+	"err.gitveloGatewayUnavailable": {
+		EN:   "GitVelo is not running",
+		ZHCN: "GitVelo 未运行",
+		ZHTW: "GitVelo 未執行",
+	},
+	"err.gitveloProxyRunning": {
+		EN:   "stop the GitVelo card before switching the reverse proxy (the startup mode changes)",
+		ZHCN: "请先停止 GitVelo 卡片再切换反向代理(启动模式会随之改变)",
+		ZHTW: "請先停止 GitVelo 卡片再切換反向代理(啟動模式會隨之改變)",
+	},
 	"err.emulatorNoGame": {
 		EN:   "the selected file is not a recognized game under the configured directories (emulatorjs.dirs)",
 		ZHCN: "所选文件不是配置目录(emulatorjs.dirs)中可识别的游戏",
@@ -399,6 +419,11 @@ autostart 參數:
 		EN:   "opencode gateway on %s",
 		ZHCN: "opencode 网关监听 %s",
 		ZHTW: "opencode 閘道監聽 %s",
+	},
+	"msg.gitveloGateway": {
+		EN:   "GitVelo gateway on %s",
+		ZHCN: "GitVelo 网关监听 %s",
+		ZHTW: "GitVelo 閘道監聽 %s",
 	},
 	"msg.vscodeToken": {
 		EN:   "VS Code web connection token (shown on the VS Code card): %s",

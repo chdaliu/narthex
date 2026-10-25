@@ -39,6 +39,13 @@ type Manager struct {
 	// MdbookPortRange is the range a free port is picked from for mdBook
 	// servers.
 	MdbookPortRange [2]int
+	// GitveloHostname is the listen address passed to the GitVelo server
+	// when the card opens it directly (reverse proxy off). Proxy mode
+	// always binds 127.0.0.1 (see startGitvelo).
+	GitveloHostname string
+	// GitveloPortRange is the range a free port is picked from for GitVelo
+	// servers.
+	GitveloPortRange [2]int
 	// VscodeHostname is the listen address passed to the VS Code web
 	// server (0.0.0.0 makes it reachable from other devices).
 	VscodeHostname string
@@ -125,7 +132,7 @@ func New(hostname string, portRange [2]int, logDir string) *Manager {
 // opencode web server is spawned with dir as its working directory. The
 // child runs in its own process group so Stop can terminate the whole
 // tree. Output is appended to <LogDir>/<id>.log.
-func (m *Manager) Start(kind, dir, id string, hosts []string) (pid int, port int, err error) {
+func (m *Manager) Start(kind, dir, id string, hosts []string, noAuth bool) (pid int, port int, err error) {
 	switch kind {
 	case store.KindComfyUI:
 		port, err = m.FreePort()
@@ -145,6 +152,12 @@ func (m *Manager) Start(kind, dir, id string, hosts []string) (pid int, port int
 			return 0, 0, err
 		}
 		pid, err = m.startMdbook(dir, id, port)
+	case store.KindGitvelo:
+		port, err = freePortIn(m.GitveloPortRange)
+		if err != nil {
+			return 0, 0, err
+		}
+		pid, err = m.startGitvelo(dir, id, port, noAuth)
 	case store.KindVSCode:
 		port, err = freePortIn(m.VscodePortRange)
 		if err != nil {

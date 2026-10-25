@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -53,13 +54,16 @@ type fakeBackend struct {
 	urlPort int
 	// lastHosts records the browser hosts of the most recent Start.
 	lastHosts []string
+	// lastNoAuth records the noAuth flag of the most recent Start.
+	lastNoAuth bool
 }
 
-func (f *fakeBackend) Start(kind, dir, id string, hosts []string) (int, int, error) {
+func (f *fakeBackend) Start(kind, dir, id string, hosts []string, noAuth bool) (int, int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.started = append(f.started, kind+"|"+dir+"|"+id)
 	f.lastHosts = hosts
+	f.lastNoAuth = noAuth
 	f.alive = true
 	f.healthy = true
 	f.mem = 42000
@@ -165,6 +169,12 @@ func emulatorInstalled(s *api.Service, gamesDir, gamePath string) {
 		_ = os.MkdirAll(filepath.Dir(gamePath), 0o755)
 		_ = os.WriteFile(gamePath, []byte("rom"), 0o600)
 	}
+}
+
+// gitveloInstalled configures the gitvelo detection seam so the GitVelo
+// web-service kind is reported as installed.
+func gitveloInstalled(s *api.Service) {
+	s.GitveloBin = func() string { return "/usr/bin/gitvelo" }
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -1457,6 +1467,23 @@ func TestSettingsGatewayPort(t *testing.T) {
 	if m["gatewayPort"] != float64(want) {
 		t.Fatalf("meta gatewayPort = %v, want %d", m["gatewayPort"], want)
 	}
+
+	// The gitvelo gateway port is independent and validated the same way.
+	for _, bad := range []int{0, 70000, 9090} {
+		res, _ := doReq(t, "POST", env.base+"/api/settings", cookie, map[string]any{"gitveloGatewayPort": bad})
+		if res.StatusCode != http.StatusBadRequest {
+			t.Fatalf("gitveloGatewayPort %d = %d, want 400", bad, res.StatusCode)
+		}
+	}
+	gvWant := freePort(t)
+	res, m = doReq(t, "POST", env.base+"/api/settings", cookie, map[string]any{"gitveloGatewayPort": gvWant})
+	if res.StatusCode != http.StatusOK || m["gitveloGatewayPort"] != float64(gvWant) {
+		t.Fatalf("set gitveloGatewayPort = %d %v", res.StatusCode, m)
+	}
+	res, m = doReq(t, "GET", env.base+"/api/meta", cookie, nil)
+	if m["gitveloGatewayPort"] != float64(gvWant) {
+		t.Fatalf("meta gitveloGatewayPort = %v, want %d", m["gitveloGatewayPort"], gvWant)
+	}
 }
 
 func TestAutostartAPI(t *testing.T) {
@@ -1916,6 +1943,7 @@ func TestMetaAppsIncludesNewKinds(t *testing.T) {
 		vscodeInstalled(s)
 		vscodiumInstalled(s)
 		wettyInstalled(s)
+		gitveloInstalled(s)
 		emulatorInstalled(s, filepath.Join(root, "roms"), "")
 	})
 	cookie := loginCookie(t, env.base, testPassword)
@@ -1925,7 +1953,7 @@ func TestMetaAppsIncludesNewKinds(t *testing.T) {
 	}
 	apps, _ := m["apps"].(map[string]any)
 	for kind, want := range map[string]bool{
-		"comfyui": true, "opencode": true, "mdbook": true, "vscode": true, "vscodium": true, "wetty": true, "emulatorjs": true,
+		"comfyui": true, "opencode": true, "mdbook": true, "gitvelo": true, "vscode": true, "vscodium": true, "wetty": true, "emulatorjs": true,
 	} {
 		a, _ := apps[kind].(map[string]any)
 		if a == nil || a["installed"] != want {
@@ -2077,5 +2105,110 @@ func TestMdbookProxyToggle(t *testing.T) {
 	}
 	if v, ok := m["disableProxy"]; ok && v == true {
 		t.Fatalf("wetty must not be proxy-capable: %v", m)
+	}
+}
+
+// TestGitveloCardFlow covers the GitVelo card: detection, proxy-mode start
+// (--no-auth on loopback through the gateway), the direct-mode toggle (only
+// while stopped, because it changes the spawn arguments) and the gateway
+// port setting.
+func TestGitveloCardFlow(t *testing.T) {
+	gwPort := freePort(t)
+	env := newTestEnvFull(t, func(cfg *store.Config) {
+		cfg.Gitvelo.Hostname = "0.0.0.0"
+		cfg.Gitvelo.GatewayPort = gwPort
+	}, func(s *api.Service) {
+		gitveloInstalled(s)
+		// Simulate the bound gateway listener (cmd wires the handler).
+		s.GitveloGatewayPort = gwPort
+	})
+	cookie := loginCookie(t, env.base, testPassword)
+
+	res, m := doReq(t, "GET", env.base+"/api/meta", cookie, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("meta = %d", res.StatusCode)
+	}
+	apps, _ := m["apps"].(map[string]any)
+	gv, _ := apps["gitvelo"].(map[string]any)
+	if gv == nil || gv["installed"] != true || gv["label"] != "GitVelo" {
+		t.Fatalf("meta apps.gitvelo = %v", apps)
+	}
+
+	res, m = doReq(t, "POST", env.base+"/api/cards", cookie, map[string]any{"kind": "gitvelo"})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("create gitvelo = %d %v", res.StatusCode, m)
+	}
+	if m["name"] != "GitVelo" || m["icon"] != "git-branch" {
+		t.Fatalf("gitvelo defaults = %v", m)
+	}
+	id := cardID(t, m)
+
+	// Proxy mode (default): no GitVelo login, URL points at the gateway.
+	res, m = doReq(t, "POST", env.base+"/api/cards/"+id+"/start", cookie, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("start gitvelo = %d %v", res.StatusCode, m)
+	}
+	if !env.backend.lastNoAuth {
+		t.Fatal("proxy-mode start should pass noAuth=true")
+	}
+	if want := "http://127.0.0.1:" + strconv.Itoa(gwPort) + "/"; m["url"] != want {
+		t.Fatalf("gitvelo proxy url = %v, want %s", m["url"], want)
+	}
+
+	// The proxy switch cannot be flipped while the card runs.
+	res, m = doReq(t, "PATCH", env.base+"/api/cards/"+id, cookie, map[string]any{"proxy": false})
+	if res.StatusCode != http.StatusConflict {
+		t.Fatalf("toggle proxy while running = %d %v, want 409", res.StatusCode, m)
+	}
+
+	// Stop, switch to direct mode, and start again: the server keeps its
+	// own login and the URL is its direct port.
+	res, m = doReq(t, "POST", env.base+"/api/cards/"+id+"/stop", cookie, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("stop gitvelo = %d %v", res.StatusCode, m)
+	}
+	res, m = doReq(t, "PATCH", env.base+"/api/cards/"+id, cookie, map[string]any{"proxy": false})
+	if res.StatusCode != http.StatusOK || m["disableProxy"] != true {
+		t.Fatalf("toggle proxy off = %d %v", res.StatusCode, m)
+	}
+	res, m = doReq(t, "POST", env.base+"/api/cards/"+id+"/start", cookie, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("start gitvelo direct = %d %v", res.StatusCode, m)
+	}
+	if env.backend.lastNoAuth {
+		t.Fatal("direct-mode start must not pass noAuth")
+	}
+	if m["url"] != "http://127.0.0.1:8000/" {
+		t.Fatalf("gitvelo direct url = %v", m["url"])
+	}
+
+	// Switch back after stopping, then delete.
+	doReq(t, "POST", env.base+"/api/cards/"+id+"/stop", cookie, nil)
+	res, m = doReq(t, "PATCH", env.base+"/api/cards/"+id, cookie, map[string]any{"proxy": true})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("toggle proxy back = %d %v", res.StatusCode, m)
+	}
+	res, m = doReq(t, "DELETE", env.base+"/api/cards/"+id, cookie, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("delete gitvelo = %d %v", res.StatusCode, m)
+	}
+}
+
+// TestGitveloHiddenWhenNotInstalled checks the add-card reason when the
+// gitvelo CLI is missing.
+func TestGitveloHiddenWhenNotInstalled(t *testing.T) {
+	env := newTestEnvFull(t, nil, func(s *api.Service) {
+		s.GitveloBin = func() string { return "" }
+	})
+	cookie := loginCookie(t, env.base, testPassword)
+	_, m := doReq(t, "GET", env.base+"/api/meta", cookie, nil)
+	apps, _ := m["apps"].(map[string]any)
+	gv, _ := apps["gitvelo"].(map[string]any)
+	if gv == nil || gv["installed"] != false || gv["reason"] != "add.reason.notInstalled" {
+		t.Fatalf("meta apps.gitvelo = %v", apps)
+	}
+	res, _ := doReq(t, "POST", env.base+"/api/cards", cookie, map[string]any{"kind": "gitvelo"})
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("create without gitvelo = %d, want 400", res.StatusCode)
 	}
 }
