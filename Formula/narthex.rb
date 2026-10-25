@@ -6,7 +6,7 @@ class Narthex < Formula
   desc "Lightweight web dashboard to launch and stop local apps"
   homepage "https://github.com/chdaliu/narthex"
   license "MIT"
-  version "0.1.4" # keep in sync with the latest release tag
+  version "0.2.0" # keep in sync with the latest release tag
 
   livecheck do
     url :stable
@@ -17,19 +17,19 @@ class Narthex < Formula
   on_macos do
     if Hardware::CPU.arm?
       url "https://github.com/chdaliu/narthex/releases/download/v#{version}/narthex_#{version}_darwin_arm64.tar.gz"
-      sha256 "aacb01b9d533cef284a7ff3469976337078f156b6a991ac847091510d077812a"
+      sha256 "caffe965d66256596e77b96d5e9e0db9cd07c05d10d461a9fc9000ec6266a966"
     else
       url "https://github.com/chdaliu/narthex/releases/download/v#{version}/narthex_#{version}_darwin_amd64.tar.gz"
-      sha256 "d69490bfb1b1a9c5d5ab4a5393e1847f17b7f83fc15c407bcb5ee4aa38d77576"
+      sha256 "bc209ae2efef3884415a708ecc6653e87e822b5c54cc8fffa7362ce6d34eae84"
     end
   end
   on_linux do
     if Hardware::CPU.arm? && Hardware::CPU.is_64_bit?
       url "https://github.com/chdaliu/narthex/releases/download/v#{version}/narthex_#{version}_linux_arm64.tar.gz"
-      sha256 "df836cfb644505314f740ad9044c381db57600c936e1821270d70a1dd177c08c"
+      sha256 "02242fac51333fb99df9a8484116ac69673edd61faa87918def2496d1dc877a9"
     else
       url "https://github.com/chdaliu/narthex/releases/download/v#{version}/narthex_#{version}_linux_amd64.tar.gz"
-      sha256 "1fe08256406054a44072573ebfea69bc8d6adb5fbe890374a126933fe8099684"
+      sha256 "232ce0c9170be4446c1a3429330763f450fb941e3b341302dce5960fffebeec6"
     end
   end
 
