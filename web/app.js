@@ -685,14 +685,14 @@ function detailRows(card) {
     const dirLabel = card.kind === "emulatorjs" ? t("card.gameLabel") : t("card.dirLabel");
     rows.push(`<div class="detail-row"><span class="detail-label">${dirLabel}</span><span class="detail-value"><code>${esc(card.dir)}</code></span></div>`);
   }
-  if (card.kind === "custom" && card.custom) {
-    const c = card.custom;
-    if (c.exec) rows.push(`<div class="detail-row"><span class="detail-label">${t("card.execLabel")}</span><span class="detail-value"><code>${esc(c.exec)}</code></span></div>`);
-    if (c.command) rows.push(`<div class="detail-row"><span class="detail-label">${t("card.commandLabel")}</span><span class="detail-value"><code>${esc(c.command)}</code></span></div>`);
-    if (c.workDir) rows.push(`<div class="detail-row"><span class="detail-label">${t("card.workDirLabel")}</span><span class="detail-value"><code>${esc(c.workDir)}</code></span></div>`);
-    if (c.portMode === "fixed" && c.port) rows.push(`<div class="detail-row"><span class="detail-label">${t("card.portConfigLabel")}</span><span class="detail-value"><code>${esc(c.port)}</code></span></div>`);
-    rows.push(`<div class="detail-row"><span class="detail-label">${t("card.proxyLabel")}</span><span class="detail-value">${esc(customProxyLabel(c.proxyMode))}</span></div>`);
-    if (c.installEnabled) rows.push(`<div class="detail-row"><span class="detail-label">${t("card.installLabel")}</span><span class="detail-value"><code>${esc(c.installCommand || "")}</code></span></div>`);
+  const launch = card.launch || card.custom;
+  if (launch) {
+    if (launch.exec) rows.push(`<div class="detail-row"><span class="detail-label">${t("card.execLabel")}</span><span class="detail-value"><code>${esc(launch.exec)}</code></span></div>`);
+    if (launch.command) rows.push(`<div class="detail-row"><span class="detail-label">${t("card.commandLabel")}</span><span class="detail-value"><code>${esc(launch.command)}</code></span></div>`);
+    if (launch.workDir) rows.push(`<div class="detail-row"><span class="detail-label">${t("card.workDirLabel")}</span><span class="detail-value"><code>${esc(launch.workDir)}</code></span></div>`);
+    if (launch.portMode === "fixed" && launch.port) rows.push(`<div class="detail-row"><span class="detail-label">${t("card.portConfigLabel")}</span><span class="detail-value"><code>${esc(launch.port)}</code></span></div>`);
+    if (launch.proxyMode) rows.push(`<div class="detail-row"><span class="detail-label">${t("card.proxyLabel")}</span><span class="detail-value">${esc(customProxyLabel(launch.proxyMode))}</span></div>`);
+    if (card.kind === "custom" && card.custom && card.custom.installEnabled) rows.push(`<div class="detail-row"><span class="detail-label">${t("card.installLabel")}</span><span class="detail-value"><code>${esc(card.custom.installCommand || "")}</code></span></div>`);
   }
   if (card.port) {
     rows.push(`<div class="detail-row"><span class="detail-label">${t("card.portLabel")}</span><span class="detail-value"><code>${esc(card.port)}</code></span></div>`);
@@ -923,37 +923,41 @@ function customProxyLabel(mode) {
 
 // customFieldsHTML renders the custom-card configuration fields. prefix
 // keeps the element IDs unique between the add and edit modals.
-function customFieldsHTML(prefix, c) {
+function customFieldsHTML(prefix, c, opts = {}) {
   c = c || {};
   const execMode = c.execMode || "args";
   const portMode = c.portMode || "auto";
   const proxyMode = c.proxyMode || "off";
+  const locked = !!opts.locked;
+  const showInstall = opts.showInstall !== false;
+  const showProxy = opts.showProxy !== false;
+  const dis = locked ? " disabled" : "";
   return `
     <div>
       <div class="field-label">${t("modal.execModeLabel")}</div>
-      <select id="${prefix}-exec-mode" class="btn ghost lang-select" style="width:100%">
+      <select id="${prefix}-exec-mode" class="btn ghost lang-select" style="width:100%"${dis}>
         <option value="args"${execMode === "args" ? " selected" : ""}>${t("modal.execModeArgs")}</option>
         <option value="shell"${execMode === "shell" ? " selected" : ""}>${t("modal.execModeShell")}</option>
       </select>
     </div>
     <div>
       <div class="field-label">${t("modal.execLabel")}</div>
-      <input type="text" id="${prefix}-exec" value="${esc(c.exec || "")}" placeholder="/usr/local/bin/myapp">
+      <input type="text" id="${prefix}-exec" value="${esc(c.exec || "")}" placeholder="/usr/local/bin/myapp"${dis}>
       <div class="muted" style="font-size:12px;margin-top:4px">${t("modal.execHint")}</div>
     </div>
     <div>
       <div class="field-label">${t("modal.commandLabel")}</div>
-      <textarea id="${prefix}-command" rows="3" placeholder="--port {port} --host {host}">${esc(c.command || "")}</textarea>
+      <textarea id="${prefix}-command" rows="3" placeholder="--port {port} --host {host}"${dis}>${esc(c.command || "")}</textarea>
       <div class="muted" id="${prefix}-command-hint" style="font-size:12px;margin-top:4px"></div>
     </div>
     <div>
       <div class="field-label">${t("modal.workDirLabel")}</div>
-      <input type="text" id="${prefix}-workdir" value="${esc(c.workDir || "")}" placeholder="~/my-project">
+      <input type="text" id="${prefix}-workdir" value="${esc(c.workDir || "")}" placeholder="~/my-project"${dis}>
       <div class="muted" style="font-size:12px;margin-top:4px">${t("modal.workDirHint")}</div>
     </div>
     <div>
       <div class="field-label">${t("modal.portModeLabel")}</div>
-      <select id="${prefix}-port-mode" class="btn ghost lang-select" style="width:100%">
+      <select id="${prefix}-port-mode" class="btn ghost lang-select" style="width:100%"${dis}>
         <option value="auto"${portMode === "auto" ? " selected" : ""}>${t("modal.portModeAuto")}</option>
         <option value="fixed"${portMode === "fixed" ? " selected" : ""}>${t("modal.portModeFixed")}</option>
         <option value="none"${portMode === "none" ? " selected" : ""}>${t("modal.portModeNone")}</option>
@@ -961,10 +965,10 @@ function customFieldsHTML(prefix, c) {
     </div>
     <div id="${prefix}-port-row"${portMode === "fixed" ? "" : " hidden"}>
       <div class="field-label">${t("modal.portLabel")}</div>
-      <input type="number" id="${prefix}-port" min="1" max="65535" value="${c.port || ""}" placeholder="5600">
+      <input type="number" id="${prefix}-port" min="1" max="65535" value="${c.port || ""}" placeholder="5600"${dis}>
     </div>
     <div class="muted" id="${prefix}-port-hint" style="font-size:12px">${t("modal.portHint")}</div>
-    <div>
+    ${showProxy ? `<div>
       <div class="field-label">${t("modal.proxyModeLabel")}</div>
       <select id="${prefix}-proxy-mode" class="btn ghost lang-select" style="width:100%">
         <option value="off"${proxyMode === "off" ? " selected" : ""}>${t("modal.proxyModeOff")}</option>
@@ -978,8 +982,8 @@ function customFieldsHTML(prefix, c) {
       <div class="field-label">${t("modal.customGatewayPortLabel")}</div>
       <input type="number" id="${prefix}-gateway-port" min="1" max="65535" value="${c.gatewayPort || ""}" placeholder="26200">
       <div class="muted" style="font-size:12px;margin-top:4px">${t("modal.customGatewayPortHint")}</div>
-    </div>
-    <div>
+    </div>` : ""}
+    ${showInstall ? `<div>
       <label class="slogan-toggle">
         <input type="checkbox" id="${prefix}-install-enabled"${c.installEnabled ? " checked" : ""}> ${t("modal.installEnable")}
       </label>
@@ -991,12 +995,14 @@ function customFieldsHTML(prefix, c) {
       <div class="field-label">${t("modal.installCommandLabel")}</div>
       <input type="text" id="${prefix}-install-command" value="${esc(c.installCommand || "brew install ")}" placeholder="brew install myapp">
       <div class="muted" style="font-size:12px;margin-top:4px">${t("modal.installCommandHint")}</div>
-    </div>`;
+    </div>` : ""}`;
 }
 
 // bindCustomFields wires the mode switches and returns a reader for the
-// current values.
-function bindCustomFields(modal, prefix) {
+// current values. Built-in presets pass locked=true and omit the proxy and
+// install sections.
+function bindCustomFields(modal, prefix, opts = {}) {
+  const locked = !!opts.locked;
   const mode = $(`#${prefix}-exec-mode`, modal);
   const commandHint = $(`#${prefix}-command-hint`, modal);
   const portMode = $(`#${prefix}-port-mode`, modal);
@@ -1011,28 +1017,30 @@ function bindCustomFields(modal, prefix) {
   const installCommand = $(`#${prefix}-install-command`, modal);
 
   const sync = () => {
-    commandHint.textContent = t(mode.value === "shell" ? "modal.commandShellHint" : "modal.commandArgsHint");
-    portRow.hidden = portMode.value !== "fixed";
-    portInput.disabled = portMode.value !== "fixed";
-    gatewayRow.hidden = proxyMode.value !== "gateway";
-    proxyWarning.hidden = proxyMode.value !== "path";
-    installFields.hidden = !installEnabled.checked;
-    installAuto.disabled = !installEnabled.checked;
-    if (proxyMode.value !== "off" && portMode.value === "none") {
+    if (commandHint) commandHint.textContent = t(mode.value === "shell" ? "modal.commandShellHint" : "modal.commandArgsHint");
+    if (portRow) portRow.hidden = portMode.value !== "fixed";
+    if (portInput) portInput.disabled = locked || portMode.value !== "fixed";
+    if (gatewayRow && proxyMode) gatewayRow.hidden = proxyMode.value !== "gateway";
+    if (proxyWarning && proxyMode) proxyWarning.hidden = proxyMode.value !== "path";
+    if (installFields && installEnabled) installFields.hidden = !installEnabled.checked;
+    if (installAuto && installEnabled) installAuto.disabled = locked || !installEnabled.checked;
+    if (proxyMode && portMode && proxyMode.value !== "off" && portMode.value === "none") {
       portMode.value = "auto";
-      portRow.hidden = true;
-      portInput.disabled = true;
+      if (portRow) portRow.hidden = true;
+      if (portInput) portInput.disabled = true;
     }
   };
   mode.addEventListener("change", sync);
   portMode.addEventListener("change", sync);
-  proxyMode.addEventListener("change", sync);
-  installEnabled.addEventListener("change", () => {
-    if (installEnabled.checked && !installCommand.value.trim()) {
-      installCommand.value = "brew install ";
-    }
-    sync();
-  });
+  if (proxyMode) proxyMode.addEventListener("change", sync);
+  if (installEnabled) {
+    installEnabled.addEventListener("change", () => {
+      if (installEnabled.checked && installCommand && !installCommand.value.trim()) {
+        installCommand.value = "brew install ";
+      }
+      sync();
+    });
+  }
   sync();
 
   return () => {
@@ -1044,11 +1052,11 @@ function bindCustomFields(modal, prefix) {
       workDir: $(`#${prefix}-workdir`, modal).value.trim(),
       portMode: pm,
       port: pm === "fixed" ? parseInt(portInput.value, 10) || 0 : 0,
-      proxyMode: proxyMode.value,
-      gatewayPort: proxyMode.value === "gateway" ? (parseInt($(`#${prefix}-gateway-port`, modal).value, 10) || 0) : 0,
-      installEnabled: installEnabled.checked,
-      installAuto: installEnabled.checked && installAuto.checked,
-      installCommand: installCommand.value,
+      proxyMode: proxyMode ? proxyMode.value : "off",
+      gatewayPort: proxyMode && proxyMode.value === "gateway" ? (parseInt($(`#${prefix}-gateway-port`, modal).value, 10) || 0) : 0,
+      installEnabled: installEnabled ? installEnabled.checked : false,
+      installAuto: installEnabled && installAuto ? installEnabled.checked && installAuto.checked : false,
+      installCommand: installCommand ? installCommand.value : "",
     };
   };
 }
@@ -1366,6 +1374,12 @@ async function openAddModal() {
 /* ---------- edit modal ---------- */
 
 async function openEditModal(card) {
+  const launchConfig = card.launch || card.custom;
+  const isCustom = card.kind === "custom";
+  const caps = card.capabilities || {};
+  const canEditProxy = caps.editProxy !== undefined ? caps.editProxy : isProxyKind(card.kind);
+  const canEditLegacyProxy = card.kind !== "custom" && canEditProxy;
+  const canEditGatewayPort = (card.kind === "opencode" || card.kind === "gitvelo") && caps.editGatewayPort !== false;
   const modal = openModal(`
     <h2>${t("modal.editTitle")} <button type="button" class="modal-close" title="${t("modal.close")}"><img src="/assets/icons/x.svg" alt="${t("modal.close")}"></button></h2>
     <div>
@@ -1380,14 +1394,15 @@ async function openEditModal(card) {
       <div class="field-label">${t("modal.bgLabel")}</div>
       <div id="edit-bg-grid"></div>
     </div>
-    ${card.kind === "custom" ? `<div id="edit-custom-fields">${customFieldsHTML("edit", card.custom)}</div>` : ""}
-    ${card.kind === "opencode" || card.kind === "gitvelo" ? `
+    ${launchConfig ? `<div id="edit-custom-fields">${customFieldsHTML("edit", launchConfig, { locked: !isCustom, showInstall: isCustom, showProxy: isCustom })}</div>` : ""}
+    ${!isCustom ? `<div class="muted" style="font-size:12px;margin-top:-4px">${t("modal.presetLockedHint")}</div>` : ""}
+    ${canEditGatewayPort ? `
     <div>
       <div class="field-label">${card.kind === "gitvelo" ? t("modal.gitveloGatewayPortLabel") : t("modal.gatewayPortLabel")}</div>
       <input type="number" id="edit-gateway-port" min="1" max="65535" placeholder="${card.kind === "gitvelo" ? "26101" : "4399"}" style="margin-top:6px">
       <div class="muted" id="edit-gateway-port-hint" style="font-size:12px;margin-top:4px">${card.kind === "gitvelo" ? t("modal.gitveloGatewayPortHint") : t("modal.gatewayPortHint")}</div>
     </div>` : ""}
-    ${isProxyKind(card.kind) ? `
+    ${canEditLegacyProxy ? `
     <div>
       <div class="field-label">${t("modal.proxyLabel")}</div>
       <label class="slogan-toggle">
@@ -1403,16 +1418,16 @@ async function openEditModal(card) {
   const iconPicker = iconPickerGrid(card.icon);
   $("#edit-icon-grid", modal).appendChild(iconPicker.el);
   const bgPicker = bgPickerGrid($("#edit-bg-grid", modal), card.background);
-  const customReader = card.kind === "custom" ? bindCustomFields(modal, "edit") : null;
+  const customReader = launchConfig ? bindCustomFields(modal, "edit", { locked: !isCustom }) : null;
   const isGitvelo = card.kind === "gitvelo";
-  const gwPortInput = card.kind === "opencode" || isGitvelo ? $("#edit-gateway-port", modal) : null;
+  const gwPortInput = canEditGatewayPort ? $("#edit-gateway-port", modal) : null;
   if (gwPortInput) {
     gwPortInput.value = (isGitvelo ? meta.gitveloGatewayPort : meta.gatewayPort) || "";
     if (card.running) {
       $("#edit-gateway-port-hint", modal).textContent = t(isGitvelo ? "modal.gitveloGatewayPortRunningHint" : "modal.gatewayPortRunningHint");
     }
   }
-  const proxyInput = isProxyKind(card.kind) ? $("#edit-proxy", modal) : null;
+  const proxyInput = canEditLegacyProxy ? $("#edit-proxy", modal) : null;
   if (proxyInput) {
     // Missing/false disableProxy means the proxy is on by default.
     proxyInput.checked = !card.disableProxy;
@@ -1432,7 +1447,7 @@ async function openEditModal(card) {
       alert(t("err.invalidGatewayPort"));
       return;
     }
-    if (customReader && customReader().proxyMode === "path" && !confirm(t("modal.proxyPathWarning"))) {
+    if (isCustom && customReader && customReader().proxyMode === "path" && !confirm(t("modal.proxyPathWarning"))) {
       return;
     }
     btn.disabled = true;
@@ -1454,7 +1469,7 @@ async function openEditModal(card) {
           icon: iconPicker.get(),
           background: bgPicker.get(),
           ...(proxyInput ? { proxy: proxyInput.checked } : {}),
-          ...(customReader ? { custom: customReader() } : {}),
+          ...(isCustom && customReader ? { custom: customReader() } : {}),
         }),
       });
       closeModal();

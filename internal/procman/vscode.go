@@ -4,27 +4,26 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 )
 
-// startVSCode launches the VS Code web server from the `code` CLI.
-func (m *Manager) startVSCode(dir, id string, port int) (int, error) {
+// prepareVSCode prepares the VS Code web server from the `code` CLI.
+func prepareVSCode(m *Manager, spec StartSpec) (PreparedLaunch, error) {
 	bin := DetectVSCode()
 	if bin == "" {
-		return 0, fmt.Errorf("VS Code CLI (code) not found in PATH")
+		return PreparedLaunch{}, fmt.Errorf("VS Code CLI (code) not found in PATH")
 	}
-	return m.startCodeServe(bin, dir, id, port, m.VscodeHostname, m.VscodeConnectionToken, m.VscodeDataDir, m.VscodeMachineSettingsFile)
+	return m.prepareCodeServe(bin, spec.Dir, m.VscodeHostname, m.VscodeConnectionToken, m.VscodeDataDir, m.VscodeMachineSettingsFile, m.VscodePortRange)
 }
 
-// startVSCodium launches the VSCodium web server from the `codium` CLI.
-func (m *Manager) startVSCodium(dir, id string, port int) (int, error) {
+// prepareVSCodium prepares the VSCodium web server from the `codium` CLI.
+func prepareVSCodium(m *Manager, spec StartSpec) (PreparedLaunch, error) {
 	bin := DetectVSCodium()
 	if bin == "" {
-		return 0, fmt.Errorf("VSCodium CLI (codium) not found in PATH")
+		return PreparedLaunch{}, fmt.Errorf("VSCodium CLI (codium) not found in PATH")
 	}
-	return m.startCodeServe(bin, dir, id, port, m.VscodiumHostname, m.VscodiumConnectionToken, m.VscodiumDataDir, m.VscodiumMachineSettingsFile)
+	return m.prepareCodeServe(bin, spec.Dir, m.VscodiumHostname, m.VscodiumConnectionToken, m.VscodiumDataDir, m.VscodiumMachineSettingsFile, m.VscodiumPortRange)
 }
 
 // startCodeServe launches the shared VS Code-family web server:
@@ -43,14 +42,18 @@ func (m *Manager) startVSCodium(dir, id string, port int) (int, error) {
 // that must persist go to the server-side Machine settings via Remote
 // Settings (Preferences → Open Remote Settings). When machineSettingsFile
 // is set, its keys are seeded into that Machine settings file first.
-func (m *Manager) startCodeServe(bin, dir, id string, port int, host, token, serverDataDir, machineSettingsFile string) (int, error) {
+func (m *Manager) prepareCodeServe(bin, dir, host, token, serverDataDir, machineSettingsFile string, portRange [2]int) (PreparedLaunch, error) {
 	noOpen, err := m.noOpenDir()
 	if err != nil {
-		return 0, err
+		return PreparedLaunch{}, err
+	}
+	port, err := freePortIn(portRange)
+	if err != nil {
+		return PreparedLaunch{}, err
 	}
 	if serverDataDir != "" && machineSettingsFile != "" {
 		if err := seedMachineSettings(serverDataDir, machineSettingsFile); err != nil {
-			return 0, err
+			return PreparedLaunch{}, err
 		}
 	}
 	env := prependPath(os.Environ(), noOpen)
@@ -61,15 +64,12 @@ func (m *Manager) startCodeServe(bin, dir, id string, port int, host, token, ser
 	}
 	if serverDataDir != "" {
 		if err := os.MkdirAll(serverDataDir, 0o700); err != nil {
-			return 0, fmt.Errorf("create server data dir: %w", err)
+			return PreparedLaunch{}, fmt.Errorf("create server data dir: %w", err)
 		}
 		args = append(args, "--server-data-dir", filepath.Clean(serverDataDir))
 	}
 	args = append(args, "--accept-server-license-terms", "--disable-telemetry")
-	cmd := exec.Command(bin, args...)
-	cmd.Dir = dir
-	cmd.Env = env
-	return m.spawn(cmd, id)
+	return PreparedLaunch{Path: bin, Args: args, Env: env, Dir: dir, Port: port}, nil
 }
 
 // seedMachineSettings merges the JSON object at sourcePath into the

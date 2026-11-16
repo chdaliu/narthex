@@ -26,6 +26,10 @@ type StartSpec struct {
 	// fronted by the narthex gateway (gitvelo proxy mode); it is ignored by
 	// kinds whose server has no such switch.
 	NoAuth bool
+	// Launch is the effective launch configuration. Custom cards use it
+	// directly; built-in launchers use their own preset/dynamic values and
+	// only consult it for display-only fields (proxy mode).
+	Launch *store.LaunchConfig
 }
 
 // Backend starts, stops and inspects managed instances.

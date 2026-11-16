@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -149,14 +148,19 @@ func DetectEmulatorGames(dirs []string) []EmulatorGame {
 // own binary because EmulatorJS ships no CLI of its own; the child binds its
 // own port so the card can be reached directly as well as through the
 // /emulator/ same-origin proxy.
-func (m *Manager) startEmulatorJS(dir, id string, port int) (int, error) {
+func prepareEmulatorJS(m *Manager, spec StartSpec) (PreparedLaunch, error) {
+	dir := spec.Dir
 	bin := DetectEmulatorServer()
 	if bin == "" {
-		return 0, fmt.Errorf("narthex binary not found for emulator-serve")
+		return PreparedLaunch{}, fmt.Errorf("narthex binary not found for emulator-serve")
 	}
 	core, _, ok := EmulatorCoreFor(dir)
 	if !ok {
-		return 0, fmt.Errorf("unsupported ROM file: %s", dir)
+		return PreparedLaunch{}, fmt.Errorf("unsupported ROM file: %s", dir)
+	}
+	port, err := freePortIn(m.EmulatorPortRange)
+	if err != nil {
+		return PreparedLaunch{}, err
 	}
 	args := []string{"emulator-serve",
 		"--rom", dir,
@@ -171,9 +175,7 @@ func (m *Manager) startEmulatorJS(dir, id string, port int) (int, error) {
 	if m.EmulatorCDNVersion != "" {
 		args = append(args, "--cdn", m.EmulatorCDNVersion)
 	}
-	cmd := exec.Command(bin, args...)
-	cmd.Dir = filepath.Dir(dir)
-	return m.spawn(cmd, id)
+	return PreparedLaunch{Path: bin, Args: args, Dir: filepath.Dir(dir), Port: port}, nil
 }
 
 // DetectEmulatorServer returns the binary that runs the `emulator-serve`

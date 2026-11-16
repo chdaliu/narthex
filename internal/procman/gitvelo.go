@@ -3,8 +3,9 @@ package procman
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strconv"
+
+	"narthex/internal/store"
 )
 
 // startGitvelo launches the GitVelo web service from the `gitvelo` CLI.
@@ -23,10 +24,18 @@ import (
 //
 // The working directory dir is the user's home. The child runs in its own
 // process group with output appended to <LogDir>/<id>.log (see spawn).
-func (m *Manager) startGitvelo(dir, id string, port int, noAuth bool) (int, error) {
+func prepareGitvelo(m *Manager, spec StartSpec) (PreparedLaunch, error) {
 	bin := DetectGitvelo()
 	if bin == "" {
-		return 0, fmt.Errorf("GitVelo CLI (gitvelo) not found in PATH")
+		return PreparedLaunch{}, fmt.Errorf("GitVelo CLI (gitvelo) not found in PATH")
+	}
+	port, err := freePortIn(m.GitveloPortRange)
+	if err != nil {
+		return PreparedLaunch{}, err
+	}
+	noAuth := spec.NoAuth
+	if spec.Launch != nil && spec.Launch.ProxyMode != "" {
+		noAuth = spec.Launch.ProxyMode == store.CustomProxyGateway
 	}
 	host := m.GitveloHostname
 	if host == "" {
@@ -37,9 +46,7 @@ func (m *Manager) startGitvelo(dir, id string, port int, noAuth bool) (int, erro
 		// --no-auth trusts the reverse proxy: keep it loopback-only.
 		args = []string{"serve", "--no-auth", "--host", "127.0.0.1", "--port", strconv.Itoa(port)}
 	}
-	cmd := exec.Command(bin, args...)
-	cmd.Dir = dir
-	return m.spawn(cmd, id)
+	return PreparedLaunch{Path: bin, Args: args, Dir: spec.Dir, Port: port}, nil
 }
 
 // DetectGitvelo returns the path to the GitVelo CLI (`gitvelo`), or "" when

@@ -62,6 +62,10 @@ func (s *Service) HandleCreateCard(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "err.appNotFound", kindLabel(kind))
 		return
 	}
+	if kind != store.KindCustom && req.Custom != nil {
+		s.writeError(w, http.StatusBadRequest, "err.lockedField")
+		return
+	}
 	dir := ""
 	custom := (*store.CustomCard)(nil)
 	switch kind {
@@ -145,6 +149,10 @@ func (s *Service) HandlePatchCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	card := &s.State.Cards[idx]
+	if card.Kind != store.KindCustom && req.Custom != nil {
+		s.writeError(w, http.StatusBadRequest, "err.lockedField")
+		return
+	}
 	if req.Name != "" {
 		card.Name = strings.TrimSpace(req.Name)
 	}
@@ -347,6 +355,7 @@ func (s *Service) startCardLocked(card *store.Card, reqHost string) (CardView, s
 		Dir:    dir,
 		Hosts:  s.browserHosts(reqHost),
 		NoAuth: card.Kind == store.KindGitvelo && !card.DisableProxy,
+		Launch: s.launchFor(*card),
 	}
 	pid, port, err := s.Backend.Start(spec)
 	if err != nil {

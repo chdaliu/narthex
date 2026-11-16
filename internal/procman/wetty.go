@@ -51,10 +51,14 @@ type managedSSHDState struct {
 // + this instance's port. hosts carries the browser-side hosts the card is
 // opened from (request host and configured internal address); the loopback
 // variants are always allowed so local access works out of the box.
-func (m *Manager) startWetty(dir, id string, port int, hosts []string) (int, error) {
+func prepareWetty(m *Manager, spec StartSpec) (PreparedLaunch, error) {
 	bin := DetectWetty()
 	if bin == "" {
-		return 0, fmt.Errorf("wetty CLI not found in PATH")
+		return PreparedLaunch{}, fmt.Errorf("wetty CLI not found in PATH")
+	}
+	port, err := freePortIn(m.WettyPortRange)
+	if err != nil {
+		return PreparedLaunch{}, err
 	}
 
 	sshHost := m.WettySSHHost
@@ -63,22 +67,21 @@ func (m *Manager) startWetty(dir, id string, port int, hosts []string) (int, err
 	managed := m.wettyManagedSSH()
 
 	var sshdPid int
-	var err error
 	if managed {
 		username, userErr := currentUsername()
 		if userErr != nil {
-			return 0, userErr
+			return PreparedLaunch{}, userErr
 		}
 		if sshUser != "" && sshUser != username {
-			return 0, fmt.Errorf("wetty.sshUser %q cannot log in through the managed sshd (only %q); set wetty.sshMode to %q to use another account", sshUser, username, store.WettySSHSystem)
+			return PreparedLaunch{}, fmt.Errorf("wetty.sshUser %q cannot log in through the managed sshd (only %q); set wetty.sshMode to %q to use another account", sshUser, username, store.WettySSHSystem)
 		}
 		sshUser = username
 		// A previous serve (or a SIGKILLed narthex) can leave the private
 		// sshd behind; reap it before starting a new one.
 		m.cleanupManagedSSHD()
-		sshdPid, sshPort, err = m.startManagedSSHD(username, id)
+		sshdPid, sshPort, err = m.startManagedSSHD(username, spec.Card.ID)
 		if err != nil {
-			return 0, err
+			return PreparedLaunch{}, err
 		}
 		// WeTTY talks to the private sshd over loopback only.
 		sshHost = "127.0.0.1"
@@ -94,30 +97,25 @@ func (m *Manager) startWetty(dir, id string, port int, hosts []string) (int, err
 	if sshUser != "" {
 		args = append(args, "--ssh-user", sshUser)
 	}
-	for _, origin := range wettyOrigins(port, hosts) {
+	for _, origin := range wettyOrigins(port, spec.Hosts) {
 		args = append(args, "--allowed-origin", origin)
 	}
-	cmd := exec.Command(bin, args...)
-	cmd.Dir = dir
-
-	if !managed {
-		return m.spawn(cmd, id)
+	p := PreparedLaunch{Path: bin, Args: args, Dir: spec.Dir, Port: port}
+	if managed {
+		p.OnExit = []func(int){func(int) { m.stopManagedSSHDProcess(sshdPid) }}
+		p.Cleanup = func() { m.stopManagedSSHDProcess(sshdPid) }
+		p.AfterStart = func(wettyPid int) error {
+			// A broken wetty (e.g. a missing Node runtime) dies within a few
+			// milliseconds; do not leave the private sshd behind in that case.
+			time.Sleep(200 * time.Millisecond)
+			if !Alive(wettyPid) {
+				return fmt.Errorf("wetty exited immediately; see %s", filepath.Join(m.LogDir, spec.Card.ID+".log"))
+			}
+			m.recordManagedSSHDWettyPID(sshdPid, wettyPid)
+			return nil
+		}
 	}
-
-	wettyPid, err := m.spawn(cmd, id, func(int) { m.stopManagedSSHDProcess(sshdPid) })
-	if err != nil {
-		m.stopManagedSSHDProcess(sshdPid)
-		return 0, err
-	}
-	// A broken wetty (e.g. a missing Node runtime) dies within a few
-	// milliseconds; do not leave the private sshd behind in that case.
-	time.Sleep(200 * time.Millisecond)
-	if !Alive(wettyPid) {
-		m.stopManagedSSHDProcess(sshdPid)
-		return 0, fmt.Errorf("wetty exited immediately; see %s", filepath.Join(m.LogDir, id+".log"))
-	}
-	m.recordManagedSSHDWettyPID(sshdPid, wettyPid)
-	return wettyPid, nil
+	return p, nil
 }
 
 // wettyManagedSSH reports whether the card uses narthex's private sshd. The

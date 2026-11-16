@@ -358,6 +358,11 @@ autostart 參數:
 		ZHCN: "自定义应用已停止,正在返回 Narthex 面板...",
 		ZHTW: "自訂應用程式已停止,正在返回 Narthex 面板...",
 	},
+	"err.lockedField": {
+		EN:   "this launch field is locked by the built-in preset",
+		ZHCN: "该启动字段由内置预设锁定",
+		ZHTW: "該啟動欄位由內建預設鎖定",
+	},
 	"err.customRequired": {
 		EN:   "custom card configuration is required",
 		ZHCN: "缺少自定义卡片配置",

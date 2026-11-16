@@ -542,9 +542,9 @@ func SaveConfig(path string, c *Config) error {
 	return atomicWrite(path, c, 0o600)
 }
 
-// CustomCard is the configuration of a user-defined card. It is only set
-// when Card.Kind is KindCustom.
-type CustomCard struct {
+// LaunchConfig is the launch configuration used by custom cards and exposed
+// read-only as the preset of built-in cards.
+type LaunchConfig struct {
 	// ExecMode is CustomExecArgs (default) or CustomExecShell.
 	ExecMode string `json:"execMode,omitempty"`
 	// Exec is the program path: an absolute path, a ~/ path, or a bare
@@ -575,6 +575,9 @@ type CustomCard struct {
 	// "brew install " at creation time).
 	InstallCommand string `json:"installCommand,omitempty"`
 }
+
+// CustomCard is kept as an alias for the previous name of LaunchConfig.
+type CustomCard = LaunchConfig
 
 // Card is a managed app entry. Built-in kinds have at most one card each
 // (Kind is their identity); custom cards are identified by ID and may be

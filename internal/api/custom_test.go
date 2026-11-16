@@ -78,6 +78,53 @@ func TestCustomCardFlow(t *testing.T) {
 	}
 }
 
+func TestBuiltinPresetIsLocked(t *testing.T) {
+	env := newTestEnvFull(t, nil, func(s *api.Service) {
+		opencodeInstalled(s)
+	})
+	cookie := loginCookie(t, env.base, testPassword)
+
+	res, m := doReq(t, "POST", env.base+"/api/cards", cookie, map[string]any{
+		"kind":   "opencode",
+		"custom": map[string]any{"execMode": "shell", "command": "should-not-apply"},
+	})
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("built-in create with custom = %d, want 400", res.StatusCode)
+	}
+
+	res, m = doReq(t, "POST", env.base+"/api/cards", cookie, map[string]any{"kind": "opencode"})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("create opencode = %d %v", res.StatusCode, m)
+	}
+	id := cardID(t, m)
+	if m["preset"] != "opencode" {
+		t.Fatalf("preset = %v", m["preset"])
+	}
+	launch, _ := m["launch"].(map[string]any)
+	if launch == nil || launch["exec"] != "opencode" {
+		t.Fatalf("launch = %#v", m["launch"])
+	}
+	caps, _ := m["capabilities"].(map[string]any)
+	if caps == nil || caps["editLaunch"] != false || caps["editProxy"] != true || caps["install"] != false {
+		t.Fatalf("capabilities = %#v", m["capabilities"])
+	}
+
+	res, _ = doReq(t, "PATCH", env.base+"/api/cards/"+id, cookie, map[string]any{
+		"custom": map[string]any{"execMode": "shell", "command": "should-not-apply"},
+	})
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("built-in patch launch = %d, want 400", res.StatusCode)
+	}
+	res, _ = doReq(t, "PATCH", env.base+"/api/cards/"+id, cookie, map[string]any{"name": "Renamed"})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("built-in patch name = %d", res.StatusCode)
+	}
+	res, _ = doReq(t, "POST", env.base+"/api/cards/"+id+"/install", cookie, map[string]any{})
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("built-in install = %d, want 400", res.StatusCode)
+	}
+}
+
 func TestCrossOriginMutationRejected(t *testing.T) {
 	env := newTestEnv(t)
 	cookie := loginCookie(t, env.base, testPassword)

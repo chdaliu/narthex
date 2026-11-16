@@ -107,6 +107,13 @@ textarea {
 
 input:focus, textarea:focus { border-color: var(--accent); }
 
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: .58;
+  cursor: not-allowed;
+}
+
 .install-log {
   max-height: 220px;
   overflow: auto;

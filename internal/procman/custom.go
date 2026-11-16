@@ -90,15 +90,20 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// startCustom launches a user-defined card. It resolves the program, picks
+// prepareCustom prepares a user-defined card. It resolves the program, picks
 // or validates the port, expands the {port}/{host} placeholders, and runs the
 // command in its own process group.
-func (m *Manager) startCustom(card store.Card, dir string) (int, int, error) {
-	c := card.Custom
+func prepareCustom(m *Manager, spec StartSpec) (PreparedLaunch, error) {
+	c := spec.Launch
 	if c == nil {
-		return 0, 0, fmt.Errorf("custom card has no configuration")
+		c = spec.Card.Custom
 	}
-	store.NormalizeCustomCard(c)
+	if c == nil {
+		return PreparedLaunch{}, fmt.Errorf("custom card has no configuration")
+	}
+	copy := *c
+	store.NormalizeCustomCard(&copy)
+	c = &copy
 
 	execPath := ""
 	var err error
@@ -108,21 +113,21 @@ func (m *Manager) startCustom(card store.Card, dir string) (int, int, error) {
 			// In shell mode Exec is optional metadata used only for install
 			// detection; the shell command may resolve the program itself.
 			if c.ExecMode == store.CustomExecArgs {
-				return 0, 0, err
+				return PreparedLaunch{}, err
 			}
 			execPath = ""
 		}
 	}
 	if c.ExecMode == store.CustomExecArgs && execPath == "" {
-		return 0, 0, fmt.Errorf("program path is required in args mode")
+		return PreparedLaunch{}, fmt.Errorf("program path is required in args mode")
 	}
 	if strings.TrimSpace(c.Command) == "" && c.ExecMode == store.CustomExecShell {
-		return 0, 0, fmt.Errorf("shell command is required in shell mode")
+		return PreparedLaunch{}, fmt.Errorf("shell command is required in shell mode")
 	}
 
-	port, err := m.customPort(card)
+	port, err := m.customPort(spec.Card, c)
 	if err != nil {
-		return 0, 0, err
+		return PreparedLaunch{}, err
 	}
 	host := m.CustomHostname
 	if host == "" {
@@ -144,7 +149,7 @@ func (m *Manager) startCustom(card store.Card, dir string) (int, int, error) {
 		}
 	}
 
-	cwd := dir
+	cwd := spec.Dir
 	if cwd == "" {
 		cwd = expandHome(strings.TrimSpace(c.WorkDir))
 	}
@@ -152,7 +157,7 @@ func (m *Manager) startCustom(card store.Card, dir string) (int, int, error) {
 		cwd, _ = os.UserHomeDir()
 	}
 	if info, statErr := os.Stat(cwd); statErr != nil || !info.IsDir() {
-		return 0, 0, fmt.Errorf("working directory not found: %s", cwd)
+		return PreparedLaunch{}, fmt.Errorf("working directory not found: %s", cwd)
 	}
 
 	env := append(os.Environ(),
@@ -161,19 +166,17 @@ func (m *Manager) startCustom(card store.Card, dir string) (int, int, error) {
 		"NARTHEX_HOST="+host,
 	)
 	env = customPathEnv(env, m.CustomPathDirs)
-	cmd := exec.Command("/bin/sh", "-c", line)
-	cmd.Dir = cwd
-	cmd.Env = env
-	pid, err := m.spawn(cmd, card.ID)
-	if err != nil {
-		return 0, 0, err
-	}
-	return pid, port, nil
+	return PreparedLaunch{
+		Path: "/bin/sh",
+		Args: []string{"-c", line},
+		Env:  env,
+		Dir:  cwd,
+		Port: port,
+	}, nil
 }
 
 // customPort picks the runtime port of a custom card.
-func (m *Manager) customPort(card store.Card) (int, error) {
-	c := card.Custom
+func (m *Manager) customPort(card store.Card, c *store.LaunchConfig) (int, error) {
 	if c == nil {
 		return 0, nil
 	}

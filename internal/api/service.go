@@ -517,6 +517,18 @@ func (s *Service) writeError(w http.ResponseWriter, code int, key string, args .
 	WriteJSON(w, code, map[string]string{"error": msg})
 }
 
+// CardCapabilities tells the UI which card actions/fields are available.
+// The API enforces the same policy server-side.
+type CardCapabilities struct {
+	EditBasic       bool `json:"editBasic"`
+	EditLaunch      bool `json:"editLaunch"`
+	EditProxy       bool `json:"editProxy"`
+	EditGatewayPort bool `json:"editGatewayPort"`
+	Install         bool `json:"install"`
+	Delete          bool `json:"delete"`
+	StartStop       bool `json:"startStop"`
+}
+
 // CardView is a Card enriched with live runtime status.
 type CardView struct {
 	store.Card
@@ -525,6 +537,16 @@ type CardView struct {
 	MemoryKB int64  `json:"memoryKB"`
 	Uptime   int64  `json:"uptime"`
 	URL      string `json:"url"`
+	// Preset is the built-in preset name (empty for custom cards).
+	Preset string `json:"preset,omitempty"`
+	// Launch is the effective launch configuration: editable for custom
+	// cards, read-only preset details for built-in cards.
+	Launch *store.LaunchConfig `json:"launch,omitempty"`
+	// LockedFields lists launch fields the API refuses to change for this
+	// card (built-in presets).
+	LockedFields []string `json:"lockedFields,omitempty"`
+	// Capabilities drives the edit/detail UI.
+	Capabilities CardCapabilities `json:"capabilities"`
 	// APIURL is the direct (non-gateway) base URL of a running opencode
 	// server, for remote API clients such as `opencode attach` or the SDK.
 	// Only set for opencode cards.
@@ -544,6 +566,13 @@ type CardView struct {
 
 func (s *Service) view(c store.Card, reqHost string) CardView {
 	v := CardView{Card: c}
+	v.Preset = c.Kind
+	if c.Kind == store.KindCustom {
+		v.Preset = ""
+	}
+	v.Launch = s.launchFor(c)
+	v.LockedFields = lockedLaunchFields(c.Kind)
+	v.Capabilities = capabilitiesFor(c.Kind)
 	switch c.Kind {
 	case store.KindOpencode:
 		v.Username = store.OpencodeUsername
@@ -582,6 +611,111 @@ func (s *Service) view(c store.Card, reqHost string) CardView {
 		}
 	}
 	return v
+}
+
+// launchFor returns the effective launch configuration of a card. Custom
+// cards use their stored configuration; built-in cards expose a read-only
+// preset generated from their kind and current config.
+func (s *Service) launchFor(c store.Card) *store.LaunchConfig {
+	if c.Kind == store.KindCustom {
+		if c.Custom == nil {
+			return &store.LaunchConfig{}
+		}
+		cp := *c.Custom
+		store.NormalizeCustomCard(&cp)
+		return &cp
+	}
+	l := &store.LaunchConfig{
+		ExecMode:  store.CustomExecArgs,
+		PortMode:  store.CustomPortAuto,
+		ProxyMode: s.presetProxyMode(c),
+	}
+	switch c.Kind {
+	case store.KindComfyUI:
+		l.Exec = "python (ComfyUI Desktop install, auto-detected)"
+		l.Command = "main.py --port {port} --listen {host}"
+	case store.KindOpencode:
+		l.Exec = "opencode"
+		l.Command = "serve --port {port} --hostname {host}"
+	case store.KindMdbook:
+		l.Exec = "mdbook"
+		l.Command = "serve --port {port} --hostname {host}"
+		l.WorkDir = c.Dir
+	case store.KindGitvelo:
+		l.Exec = "gitvelo"
+		l.Command = "serve [--no-auth] --host {host} --port {port}"
+	case store.KindVSCode:
+		l.Exec = "code"
+		l.Command = "serve-web --host {host} --port {port} --connection-token …"
+	case store.KindVSCodium:
+		l.Exec = "codium"
+		l.Command = "serve-web --host {host} --port {port} --connection-token …"
+	case store.KindWetty:
+		l.Exec = "wetty"
+		l.Command = "--port {port} --host {host} [--ssh-host …] [--ssh-user …]"
+	case store.KindEmulatorJS:
+		l.Exec = "narthex emulator-serve"
+		l.Command = "--rom … --core … --host {host} --port {port}"
+		l.WorkDir = filepath.Dir(c.Dir)
+	}
+	switch c.Kind {
+	case store.KindOpencode:
+		l.GatewayPort = s.Config.Opencode.GatewayPort
+	case store.KindGitvelo:
+		l.GatewayPort = s.Config.Gitvelo.GatewayPort
+	}
+	return l
+}
+
+// presetProxyMode maps the legacy DisableProxy toggle to a proxy mode for
+// the read-only preset view.
+func (s *Service) presetProxyMode(c store.Card) string {
+	if !proxyCapable(c.Kind) {
+		return store.CustomProxyOff
+	}
+	if c.DisableProxy {
+		return store.CustomProxyOff
+	}
+	switch c.Kind {
+	case store.KindMdbook, store.KindEmulatorJS:
+		return store.CustomProxyPath
+	case store.KindOpencode, store.KindGitvelo:
+		return store.CustomProxyGateway
+	}
+	return store.CustomProxyOff
+}
+
+// lockedLaunchFields lists the launch fields a built-in preset refuses to
+// change. Custom cards return nil (all fields editable).
+func lockedLaunchFields(kind string) []string {
+	if kind == store.KindCustom {
+		return nil
+	}
+	return []string{"execMode", "exec", "command", "workDir", "portMode", "port", "installEnabled", "installAuto", "installCommand"}
+}
+
+// capabilitiesFor describes the operations available for a kind.
+func capabilitiesFor(kind string) CardCapabilities {
+	if kind == store.KindCustom {
+		return CardCapabilities{
+			EditBasic:       true,
+			EditLaunch:      true,
+			EditProxy:       true,
+			EditGatewayPort: true,
+			Install:         true,
+			Delete:          true,
+			StartStop:       true,
+		}
+	}
+	return CardCapabilities{
+		EditBasic:       true,
+		EditLaunch:      false,
+		EditProxy:       proxyCapable(kind),
+		EditGatewayPort: kind == store.KindOpencode || kind == store.KindGitvelo,
+		Install:         false,
+		Delete:          true,
+		StartStop:       true,
+	}
 }
 
 // instanceURL builds the base URL for a running card. When an internal

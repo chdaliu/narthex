@@ -11,17 +11,24 @@ import (
 	"strings"
 )
 
-// startMdbook launches the mdBook server for the book in dir:
+// prepareMdbook prepares the mdBook server for the book in dir:
 // `mdbook serve --port <port> --hostname <host>`. mdBook does not open a
 // browser unless --open is passed.
-func (m *Manager) startMdbook(dir, id string, port int) (int, error) {
+func prepareMdbook(m *Manager, spec StartSpec) (PreparedLaunch, error) {
 	bin := DetectMdbook()
 	if bin == "" {
-		return 0, fmt.Errorf("mdbook CLI not found in PATH")
+		return PreparedLaunch{}, fmt.Errorf("mdbook CLI not found in PATH")
 	}
-	cmd := exec.Command(bin, "serve", "--port", strconv.Itoa(port), "--hostname", m.MdbookHostname)
-	cmd.Dir = dir
-	return m.spawn(cmd, id)
+	port, err := freePortIn(m.MdbookPortRange)
+	if err != nil {
+		return PreparedLaunch{}, err
+	}
+	return PreparedLaunch{
+		Path: bin,
+		Args: []string{"serve", "--port", strconv.Itoa(port), "--hostname", m.MdbookHostname},
+		Dir:  spec.Dir,
+		Port: port,
+	}, nil
 }
 
 // MdbookProject is a recognized mdBook book: a directory containing a

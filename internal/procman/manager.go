@@ -10,8 +10,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
-	"narthex/internal/store"
 )
 
 // Manager starts and stops managed instances locally.
@@ -133,68 +131,6 @@ type Manager struct {
 // New creates a Manager with sane defaults.
 func New(hostname string, portRange [2]int, logDir string) *Manager {
 	return &Manager{Hostname: hostname, PortRange: portRange, LogDir: logDir}
-}
-
-// Start launches the instance described by spec. The child runs in its own
-// process group so Stop can terminate the whole tree. Output is appended to
-// <LogDir>/<card ID>.log.
-func (m *Manager) Start(spec StartSpec) (pid int, port int, err error) {
-	card := spec.Card
-	switch card.Kind {
-	case store.KindComfyUI:
-		port, err = m.FreePort()
-		if err != nil {
-			return 0, 0, err
-		}
-		pid, err = m.startComfyUI(spec.Dir, card.ID, port)
-	case store.KindOpencode:
-		port, err = freePortIn(m.OpencodePortRange)
-		if err != nil {
-			return 0, 0, err
-		}
-		pid, err = m.startOpencode(spec.Dir, card.ID, port)
-	case store.KindMdbook:
-		port, err = freePortIn(m.MdbookPortRange)
-		if err != nil {
-			return 0, 0, err
-		}
-		pid, err = m.startMdbook(spec.Dir, card.ID, port)
-	case store.KindGitvelo:
-		port, err = freePortIn(m.GitveloPortRange)
-		if err != nil {
-			return 0, 0, err
-		}
-		pid, err = m.startGitvelo(spec.Dir, card.ID, port, spec.NoAuth)
-	case store.KindVSCode:
-		port, err = freePortIn(m.VscodePortRange)
-		if err != nil {
-			return 0, 0, err
-		}
-		pid, err = m.startVSCode(spec.Dir, card.ID, port)
-	case store.KindVSCodium:
-		port, err = freePortIn(m.VscodiumPortRange)
-		if err != nil {
-			return 0, 0, err
-		}
-		pid, err = m.startVSCodium(spec.Dir, card.ID, port)
-	case store.KindWetty:
-		port, err = freePortIn(m.WettyPortRange)
-		if err != nil {
-			return 0, 0, err
-		}
-		pid, err = m.startWetty(spec.Dir, card.ID, port, spec.Hosts)
-	case store.KindEmulatorJS:
-		port, err = freePortIn(m.EmulatorPortRange)
-		if err != nil {
-			return 0, 0, err
-		}
-		pid, err = m.startEmulatorJS(spec.Dir, card.ID, port)
-	case store.KindCustom:
-		pid, port, err = m.startCustom(card, spec.Dir)
-	default:
-		return 0, 0, fmt.Errorf("unsupported service kind: %s", card.Kind)
-	}
-	return pid, port, err
 }
 
 // spawn launches cmd in its own process group, appending output to

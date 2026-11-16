@@ -26,24 +26,31 @@ import (
 // managed card should not do (the "Open" button is the entry point). There
 // is no CLI flag to disable that, so the browser-opener (`open` on macOS,
 // `xdg-open` on Linux) is shadowed with a no-op on the child's PATH.
-func (m *Manager) startOpencode(dir, id string, port int) (int, error) {
+func prepareOpencode(m *Manager, spec StartSpec) (PreparedLaunch, error) {
 	bin := DetectOpencode()
 	if bin == "" {
-		return 0, fmt.Errorf("opencode CLI not found in PATH")
+		return PreparedLaunch{}, fmt.Errorf("opencode CLI not found in PATH")
 	}
 	noOpen, err := m.noOpenDir()
 	if err != nil {
-		return 0, err
+		return PreparedLaunch{}, err
+	}
+	port, err := freePortIn(m.OpencodePortRange)
+	if err != nil {
+		return PreparedLaunch{}, err
 	}
 	env := append(os.Environ(),
 		"OPENCODE_SERVER_PASSWORD="+m.OpencodePassword,
 		"OPENCODE_SERVER_USERNAME="+store.OpencodeUsername,
 	)
 	env = prependPath(env, noOpen)
-	cmd := exec.Command(bin, opencodeArgs(bin, port, m.OpencodeHostname)...)
-	cmd.Dir = dir
-	cmd.Env = env
-	return m.spawn(cmd, id)
+	return PreparedLaunch{
+		Path: bin,
+		Args: opencodeArgs(bin, port, m.OpencodeHostname),
+		Env:  env,
+		Dir:  spec.Dir,
+		Port: port,
+	}, nil
 }
 
 // versionRe matches the first major.minor version in CLI version output

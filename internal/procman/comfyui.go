@@ -4,14 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 )
 
-// startComfyUI launches a ComfyUI server from its install directory:
+// prepareComfyUI prepares a ComfyUI server from its install directory:
 // <python> main.py --port <port> --listen <host>. The python interpreter
 // is resolved from the install layout (a .venv, a ComfyUI Desktop
 // standalone environment, then python3/python from PATH). The install
@@ -19,19 +18,22 @@ import (
 // <installPath>/ComfyUI); the desktop's shared models, input/output
 // directories and extra launch args are passed through so the server
 // sees the same storage as the desktop app (comfyLaunchArgs).
-func (m *Manager) startComfyUI(dir, id string, port int) (int, error) {
+func prepareComfyUI(m *Manager, spec StartSpec) (PreparedLaunch, error) {
+	dir := spec.Dir
 	if _, err := os.Stat(filepath.Join(dir, "main.py")); err != nil {
-		return 0, fmt.Errorf("no main.py in %s (pick the ComfyUI install directory)", dir)
+		return PreparedLaunch{}, fmt.Errorf("no main.py in %s (pick the ComfyUI install directory)", dir)
 	}
 	python, err := m.comfyUIPython(dir)
 	if err != nil {
-		return 0, err
+		return PreparedLaunch{}, err
+	}
+	port, err := m.FreePort()
+	if err != nil {
+		return PreparedLaunch{}, err
 	}
 	args := []string{"main.py", "--port", strconv.Itoa(port), "--listen", m.Hostname}
 	args = append(args, comfyLaunchArgs(dir)...)
-	cmd := exec.Command(python, args...)
-	cmd.Dir = dir
-	return m.spawn(cmd, id)
+	return PreparedLaunch{Path: python, Args: args, Dir: dir, Port: port}, nil
 }
 
 // comfyUIPython finds a python interpreter for the ComfyUI install in
