@@ -69,7 +69,7 @@ func (s *Service) HandleInstallStatus(w http.ResponseWriter, r *http.Request) {
 	st := s.installs[id]
 	s.mu.Unlock()
 	if st == nil {
-		WriteJSON(w, http.StatusOK, map[string]any{"running": false, "output": ""})
+		WriteJSON(w, http.StatusOK, map[string]any{"running": false, "output": "", "action": "install"})
 		return
 	}
 	WriteJSON(w, http.StatusOK, s.installStatus(st))
@@ -92,6 +92,146 @@ func (s *Service) HandleCancelInstall(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+// HandleUpdateCard runs a card's update command asynchronously. Unlike
+// install, it is allowed while the card is running; the UI asks for
+// confirmation first.
+func (s *Service) HandleUpdateCard(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	s.mu.Lock()
+	idx := s.findCard(id)
+	if idx < 0 {
+		s.mu.Unlock()
+		s.writeError(w, http.StatusNotFound, "err.cardNotFound")
+		return
+	}
+	card := &s.State.Cards[idx]
+	st, errKey := s.beginUpdateLocked(card)
+	if errKey != "" {
+		s.mu.Unlock()
+		status := http.StatusBadRequest
+		if errKey == "err.updateRunning" {
+			status = http.StatusConflict
+		}
+		s.writeError(w, status, errKey)
+		return
+	}
+	s.mu.Unlock()
+	go s.runUpdate(st)
+	WriteJSON(w, http.StatusAccepted, s.updateStatus(st))
+}
+
+// HandleUpdateStatus reports the current/last update run and its log tail.
+func (s *Service) HandleUpdateStatus(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	s.mu.Lock()
+	st := s.updates[id]
+	s.mu.Unlock()
+	if st == nil {
+		WriteJSON(w, http.StatusOK, map[string]any{"running": false, "output": "", "action": "update"})
+		return
+	}
+	WriteJSON(w, http.StatusOK, s.updateStatus(st))
+}
+
+// HandleCancelUpdate cancels a running update command.
+func (s *Service) HandleCancelUpdate(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	s.mu.Lock()
+	st := s.updates[id]
+	if st == nil || !st.running {
+		s.mu.Unlock()
+		s.writeError(w, http.StatusConflict, "err.updateNotRunning")
+		return
+	}
+	if st.cancel != nil {
+		st.cancel()
+	}
+	s.mu.Unlock()
+	WriteJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// beginUpdateLocked validates and registers an update run. Caller holds s.mu.
+func (s *Service) beginUpdateLocked(card *store.Card) (*installRun, string) {
+	if card.Update == nil || !card.Update.Enabled {
+		return nil, "err.updateDisabled"
+	}
+	if strings.TrimSpace(card.Update.Command) == "" {
+		return nil, "err.updateNoCommand"
+	}
+	if s.maintenanceRunningLocked(card.ID) {
+		return nil, "err.updateRunning"
+	}
+	if s.RunInstall == nil {
+		return nil, "err.installUnsupported"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), installTimeout)
+	dir := s.installDir(card.Kind, card.Dir)
+	if card.Kind == store.KindEmulatorJS && card.Dir != "" {
+		dir = filepath.Dir(card.Dir)
+	}
+	st := &installRun{
+		cardID:    card.ID,
+		running:   true,
+		command:   card.Update.Command,
+		dir:       dir,
+		logPath:   filepath.Join(s.Dir, store.LogsDir, card.ID+"-update.log"),
+		pathDirs:  append([]string(nil), s.Config.Custom.PathDirs...),
+		startedAt: time.Now(),
+		ctx:       ctx,
+		cancel:    cancel,
+	}
+	if card.Kind == store.KindCustom && card.Custom != nil && card.Custom.WorkDir != "" {
+		st.dir = store.ExpandPath(s.Dir, card.Custom.WorkDir)
+	}
+	s.updates[card.ID] = st
+	delete(s.lastErrors, card.ID)
+	return st, ""
+}
+
+// runUpdate executes a registered update. It never holds s.mu while the
+// command runs.
+func (s *Service) runUpdate(st *installRun) {
+	select {
+	case s.installSem <- struct{}{}:
+		defer func() { <-s.installSem }()
+	case <-st.ctx.Done():
+		s.finishUpdate(st, st.ctx.Err())
+		return
+	}
+	err := s.RunInstall(st.ctx, st.command, st.dir, st.logPath, st.pathDirs)
+	s.finishUpdate(st, err)
+}
+
+func (s *Service) finishUpdate(st *installRun, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if st.cancel != nil {
+		st.cancel()
+	}
+	st.running = false
+	st.finishedAt = time.Now()
+	if err != nil {
+		st.errText = err.Error()
+		if ee, ok := err.(*exec.ExitError); ok {
+			st.exitCode = ee.ExitCode()
+		}
+		return
+	}
+	st.errText = ""
+}
+
+// maintenanceRunningLocked reports whether install or update is running for
+// the card. Caller holds s.mu.
+func (s *Service) maintenanceRunningLocked(cardID string) bool {
+	if r := s.installs[cardID]; r != nil && r.running {
+		return true
+	}
+	if r := s.updates[cardID]; r != nil && r.running {
+		return true
+	}
+	return false
+}
+
 // beginInstallLocked validates and registers an install run. Caller holds
 // s.mu.
 func (s *Service) beginInstallLocked(card *store.Card, autoStart bool, hosts []string) (*installRun, string) {
@@ -107,7 +247,7 @@ func (s *Service) beginInstallLocked(card *store.Card, autoStart bool, hosts []s
 	if s.Backend.Status(card.Kind, card.PID, card.Port).Alive {
 		return nil, "err.installCardRunning"
 	}
-	if old := s.installs[card.ID]; old != nil && old.running {
+	if s.maintenanceRunningLocked(card.ID) {
 		return nil, "err.installRunning"
 	}
 	if s.RunInstall == nil {
@@ -201,6 +341,7 @@ func (s *Service) installStatus(st *installRun) map[string]any {
 		"error":    st.errText,
 		"output":   out,
 		"logPath":  st.logPath,
+		"action":   "install",
 	}
 }
 
@@ -220,6 +361,20 @@ func (s *Service) needsAutoInstallLocked(card *store.Card) bool {
 	}
 	_, err := procman.ResolveExecutable(c.Exec, s.Config.Custom.PathDirs)
 	return err != nil
+}
+
+func (s *Service) updateStatus(st *installRun) map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := readTail(st.logPath, installOutputLimit)
+	return map[string]any{
+		"running":  st.running,
+		"exitCode": st.exitCode,
+		"error":    st.errText,
+		"output":   out,
+		"logPath":  st.logPath,
+		"action":   "update",
+	}
 }
 
 func readTail(path string, limit int) string {

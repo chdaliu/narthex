@@ -40,6 +40,9 @@ type cardRequest struct {
 	// Custom is the complete custom-card configuration. Only used for
 	// kind == "custom"; nil leaves it unchanged on PATCH.
 	Custom *store.CustomCard `json:"custom"`
+	// Update is the optional one-click update command. It applies to every
+	// kind; nil leaves it unchanged on PATCH.
+	Update *store.UpdateConfig `json:"update"`
 }
 
 // HandleCreateCard validates the kind (built-in apps must be installed and
@@ -114,6 +117,12 @@ func (s *Service) HandleCreateCard(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if req.Update != nil {
+		if errKey := validateUpdate(req.Update); errKey != "" {
+			s.writeError(w, http.StatusBadRequest, errKey)
+			return
+		}
+	}
 	card := store.Card{
 		ID:         store.RandomID(8),
 		Name:       defaultName(req.Name, kind),
@@ -122,6 +131,7 @@ func (s *Service) HandleCreateCard(w http.ResponseWriter, r *http.Request) {
 		Kind:       kind,
 		Dir:        dir,
 		Custom:     custom,
+		Update:     req.Update,
 	}
 	s.State.Cards = append(s.State.Cards, card)
 	if err := s.save(); err != nil {
@@ -181,6 +191,19 @@ func (s *Service) HandlePatchCard(w http.ResponseWriter, r *http.Request) {
 		delete(s.autoInstallFailed, card.ID)
 		delete(s.lastErrors, card.ID)
 		s.reconcileGatewayLocked()
+	}
+	if req.Update != nil {
+		if r := s.updates[card.ID]; r != nil && r.running {
+			s.writeError(w, http.StatusConflict, "err.updateRunning")
+			return
+		}
+		if errKey := validateUpdate(req.Update); errKey != "" {
+			s.writeError(w, http.StatusBadRequest, errKey)
+			return
+		}
+		card.Update = req.Update
+		delete(s.updates, card.ID)
+		delete(s.lastErrors, card.ID)
 	}
 	if req.Proxy != nil && proxyCapable(card.Kind) && card.Kind != store.KindCustom {
 		// A plain bool cannot distinguish "unset" from false, so the field
@@ -261,7 +284,7 @@ func (s *Service) HandleDeleteCard(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusConflict, "err.cardRunning")
 		return
 	}
-	if r := s.installs[card.ID]; r != nil && r.running {
+	if s.maintenanceRunningLocked(card.ID) {
 		s.writeError(w, http.StatusConflict, "err.installRunning")
 		return
 	}
@@ -274,6 +297,7 @@ func (s *Service) HandleDeleteCard(w http.ResponseWriter, r *http.Request) {
 		delete(s.customGatewayWanted, card.ID)
 	}
 	delete(s.installs, card.ID)
+	delete(s.updates, card.ID)
 	delete(s.lastErrors, card.ID)
 	delete(s.autoInstallFailed, card.ID)
 	s.State.Cards = append(s.State.Cards[:idx], s.State.Cards[idx+1:]...)
@@ -595,6 +619,20 @@ func defaultBackground(bg string) string {
 		return "bg-01"
 	}
 	return bg
+}
+
+// validateUpdate checks an optional update command.
+func validateUpdate(u *store.UpdateConfig) string {
+	if u == nil {
+		return ""
+	}
+	if len(u.Command) > 4096 {
+		return "err.customTooLong"
+	}
+	if u.Enabled && strings.TrimSpace(u.Command) == "" {
+		return "err.updateNoCommand"
+	}
+	return ""
 }
 
 // validateCustom checks a custom-card configuration and returns an i18n

@@ -317,9 +317,9 @@ function updateCardEl(r, card) {
   r.mem.textContent = card.running ? fmtMem(card.memoryKB) : "";
   r.uptime.textContent = card.running ? fmtUptime(card.uptime) : "";
 
-  if (card.installing) {
+  if (card.installing || card.updating) {
     r.statusSpin.hidden = false;
-    r.statusText.textContent = t("status.installing");
+    r.statusText.textContent = t(card.updating ? "status.updating" : "status.installing");
     r.startBtn.className = "btn start";
     r.startBtn.textContent = t("card.start");
     r.startBtn.disabled = true;
@@ -694,6 +694,9 @@ function detailRows(card) {
     if (launch.proxyMode) rows.push(`<div class="detail-row"><span class="detail-label">${t("card.proxyLabel")}</span><span class="detail-value">${esc(customProxyLabel(launch.proxyMode))}</span></div>`);
     if (card.kind === "custom" && card.custom && card.custom.installEnabled) rows.push(`<div class="detail-row"><span class="detail-label">${t("card.installLabel")}</span><span class="detail-value"><code>${esc(card.custom.installCommand || "")}</code></span></div>`);
   }
+  if (card.update && card.update.enabled) {
+    rows.push(`<div class="detail-row"><span class="detail-label">${t("card.updateLabel")}</span><span class="detail-value"><code>${esc(card.update.command || "")}</code></span></div>`);
+  }
   if (card.port) {
     rows.push(`<div class="detail-row"><span class="detail-label">${t("card.portLabel")}</span><span class="detail-value"><code>${esc(card.port)}</code></span></div>`);
   }
@@ -708,21 +711,26 @@ function detailRows(card) {
 // actions are no longer rendered on the card itself.
 function openCardModal(card) {
   const creds = credentialRows(card);
+  const hasInstall = card.kind === "custom" && card.custom && card.custom.installEnabled;
+  const hasUpdate = card.update && card.update.enabled;
+  const maintenanceRunning = card.installing || card.updating;
   const modal = openModal(`
     <h2><span class="detail-title"><img class="detail-icon" src="/assets/icons/${card.icon}.svg" alt="">${esc(card.name)}</span> <button type="button" class="modal-close" title="${t("modal.close")}"><img src="/assets/icons/x.svg" alt="${t("modal.close")}"></button></h2>
     <div class="detail-list">${detailRows(card)}</div>
     ${creds ? `<div class="detail-creds"><div class="field-label">${t("card.credsLabel")}</div>${creds}</div>` : ""}
-    ${card.kind === "custom" && card.custom && card.custom.installEnabled ? `
-    <div id="install-panel"${card.installing ? "" : " hidden"}>
-      <div class="field-label">${t("card.installLog")}</div>
-      <pre class="install-log" id="install-output"></pre>
-      <button type="button" class="btn ghost" id="btn-detail-cancel-install"${card.installing ? "" : " hidden"}>${t("card.cancelInstall")}</button>
+    ${hasInstall || hasUpdate ? `
+    <div id="maintenance-panel"${maintenanceRunning ? "" : " hidden"}>
+      <div class="field-label">${t("card.maintenanceLog")}</div>
+      <pre class="install-log" id="maintenance-output"></pre>
+      <button type="button" class="btn ghost" id="btn-detail-cancel-maintenance"${maintenanceRunning ? "" : " hidden"}>${t("card.cancelMaintenance")}</button>
     </div>` : ""}
     ${card.lastError ? `<div class="muted" style="font-size:12px;color:#ff8f8f;margin-top:8px">${esc(card.lastError)}</div>` : ""}
     ${card.installError && !card.installing ? `<div class="muted" style="font-size:12px;color:#ff8f8f;margin-top:8px">${t("card.installFailed")}: ${esc(card.installError)}</div>` : ""}
+    ${card.updateError && !card.updating ? `<div class="muted" style="font-size:12px;color:#ff8f8f;margin-top:8px">${t("card.updateFailed")}: ${esc(card.updateError)}</div>` : ""}
     <div class="modal-actions">
       ${card.running ? `<span class="muted" style="margin-right:auto;font-size:12px;align-self:center">${t("card.stopToDelete")}</span>` : ""}
-      ${card.kind === "custom" && card.custom && card.custom.installEnabled ? `<button type="button" class="btn ghost" id="btn-detail-install"${card.running || card.installing ? " disabled" : ""}>${card.installing ? t("card.installing") : t("card.install")}</button>` : ""}
+      ${hasInstall ? `<button type="button" class="btn ghost" id="btn-detail-install"${card.running || maintenanceRunning ? " disabled" : ""}>${card.installing ? t("card.installing") : t("card.install")}</button>` : ""}
+      ${hasUpdate ? `<button type="button" class="btn ghost" id="btn-detail-update"${maintenanceRunning ? " disabled" : ""}>${card.updating ? t("card.updating") : t("card.update")}</button>` : ""}
       <button type="button" class="btn ghost" id="btn-detail-delete">${t("card.delete")}</button>
       <button type="button" class="btn primary" id="btn-detail-edit">${t("card.edit")}</button>
     </div>`);
@@ -732,26 +740,33 @@ function openCardModal(card) {
   });
   $("#btn-detail-edit", modal).addEventListener("click", () => openEditModal(card));
   const installBtn = $("#btn-detail-install", modal);
-  const cancelInstallBtn = $("#btn-detail-cancel-install", modal);
-  if (cancelInstallBtn) {
-    cancelInstallBtn.addEventListener("click", async () => {
-      cancelInstallBtn.disabled = true;
+  const updateBtn = $("#btn-detail-update", modal);
+  const cancelBtn = $("#btn-detail-cancel-maintenance", modal);
+  if (cancelBtn) {
+    cancelBtn.addEventListener("click", async () => {
+      const action = modal.dataset.maintenanceAction || "install";
+      cancelBtn.disabled = true;
       try {
-        await api(`/api/cards/${card.id}/install/cancel`, { method: "POST", body: "{}" });
+        await api(`/api/cards/${card.id}/${action}/cancel`, { method: "POST", body: "{}" });
       } catch (e) {
         alertErr(e);
       }
-      cancelInstallBtn.disabled = false;
+      cancelBtn.disabled = false;
     });
   }
-  if (installBtn) {
-    installBtn.addEventListener("click", () => startInstall(card, modal));
-    if (card.installing) pollInstall(card.id, modal);
+  if (installBtn) installBtn.addEventListener("click", () => startMaintenance(card, modal, "install"));
+  if (updateBtn) {
+    updateBtn.addEventListener("click", () => {
+      if (card.running && !confirm(t("card.updateRunningConfirm"))) return;
+      startMaintenance(card, modal, "update");
+    });
   }
+  if (card.installing) pollMaintenance(card.id, modal, "install");
+  if (card.updating) pollMaintenance(card.id, modal, "update");
   const delBtn = $("#btn-detail-delete", modal);
-  if (card.running || card.installing) {
+  if (card.running || maintenanceRunning) {
     delBtn.disabled = true;
-    delBtn.title = card.installing ? t("card.installing") : t("card.stopToDelete");
+    delBtn.title = maintenanceRunning ? t(card.updating ? "card.updating" : "card.installing") : t("card.stopToDelete");
   }
   delBtn.addEventListener("click", () => {
     closeModal();
@@ -759,46 +774,50 @@ function openCardModal(card) {
   });
 }
 
-// startInstall launches a custom card's install command and polls its log.
-async function startInstall(card, modal) {
-  const btn = $("#btn-detail-install", modal);
-  const panel = $("#install-panel", modal);
+// startMaintenance launches an install/update command and polls its log.
+async function startMaintenance(card, modal, action) {
+  const isUpdate = action === "update";
+  const btn = $(isUpdate ? "#btn-detail-update" : "#btn-detail-install", modal);
+  const panel = $("#maintenance-panel", modal);
+  modal.dataset.maintenanceAction = action;
   if (btn) {
     btn.disabled = true;
-    btn.textContent = t("card.installing");
+    btn.textContent = t(isUpdate ? "card.updating" : "card.installing");
   }
   if (panel) panel.hidden = false;
   try {
-    await api(`/api/cards/${card.id}/install`, { method: "POST", body: "{}" });
-    pollInstall(card.id, modal);
+    await api(`/api/cards/${card.id}/${action}`, { method: "POST", body: "{}" });
+    pollMaintenance(card.id, modal, action);
   } catch (e) {
     alertErr(e);
     if (btn) {
       btn.disabled = false;
-      btn.textContent = t("card.install");
+      btn.textContent = t(isUpdate ? "card.update" : "card.install");
     }
   }
 }
 
-async function pollInstall(id, modal) {
-  const panel = $("#install-panel", modal);
-  const output = $("#install-output", modal);
-  const cancelBtn = $("#btn-detail-cancel-install", modal);
+async function pollMaintenance(id, modal, action) {
+  const isUpdate = action === "update";
+  const panel = $("#maintenance-panel", modal);
+  const output = $("#maintenance-output", modal);
+  const cancelBtn = $("#btn-detail-cancel-maintenance", modal);
   if (!panel || !output) return;
+  modal.dataset.maintenanceAction = action;
   panel.hidden = false;
   if (cancelBtn) cancelBtn.hidden = false;
   while (modalRoot.contains(modal)) {
     try {
-      const st = await api(`/api/cards/${id}/install`);
+      const st = await api(`/api/cards/${id}/${action}`);
       output.textContent = st.output || t("card.installOutputEmpty");
       if (!st.running) {
-        if (st.error) output.textContent += `\n${t("card.installFailed")}: ${st.error}`;
-        else output.textContent += `\n${t("card.installDone")}`;
+        if (st.error) output.textContent += `\n${t(isUpdate ? "card.updateFailed" : "card.installFailed")}: ${st.error}`;
+        else output.textContent += `\n${t(isUpdate ? "card.updateDone" : "card.installDone")}`;
         if (cancelBtn) cancelBtn.hidden = true;
-        const installBtn = $("#btn-detail-install", modal);
-        if (installBtn) {
-          installBtn.disabled = false;
-          installBtn.textContent = t("card.install");
+        const btn = $(isUpdate ? "#btn-detail-update" : "#btn-detail-install", modal);
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = t(isUpdate ? "card.update" : "card.install");
         }
         break;
       }
@@ -998,6 +1017,40 @@ function customFieldsHTML(prefix, c, opts = {}) {
     </div>` : ""}`;
 }
 
+// updateFieldsHTML renders the per-card update command (available for every
+// card, including built-in presets).
+function updateFieldsHTML(prefix, u) {
+  u = u || {};
+  const enabled = !!u.enabled;
+  return `
+    <div>
+      <label class="slogan-toggle">
+        <input type="checkbox" id="${prefix}-update-enabled"${enabled ? " checked" : ""}> ${t("modal.updateEnable")}
+      </label>
+    </div>
+    <div id="${prefix}-update-fields"${enabled ? "" : " hidden"}>
+      <div class="field-label">${t("modal.updateCommandLabel")}</div>
+      <input type="text" id="${prefix}-update-command" value="${esc(u.command || "brew upgrade ")}" placeholder="brew upgrade myapp">
+      <div class="muted" style="font-size:12px;margin-top:4px">${t("modal.updateCommandHint")}</div>
+    </div>`;
+}
+
+function bindUpdateFields(modal, prefix) {
+  const enabled = $(`#${prefix}-update-enabled`, modal);
+  const fields = $(`#${prefix}-update-fields`, modal);
+  const command = $(`#${prefix}-update-command`, modal);
+  const sync = () => {
+    fields.hidden = !enabled.checked;
+    if (enabled.checked && !command.value.trim()) command.value = "brew upgrade ";
+  };
+  enabled.addEventListener("change", sync);
+  sync();
+  return () => ({
+    enabled: enabled.checked,
+    command: command.value,
+  });
+}
+
 // bindCustomFields wires the mode switches and returns a reader for the
 // current values. Built-in presets pass locked=true and omit the proxy and
 // install sections.
@@ -1116,6 +1169,7 @@ async function openAddModal() {
     <div id="step-custom" hidden>
       <div class="field-label">${t("modal.customStep")}</div>
       <div id="custom-fields"></div>
+      <div id="custom-update-fields"></div>
       <div class="modal-actions">
         <button type="button" class="btn ghost" id="btn-custom-back">${t("modal.backToKinds")}</button>
         <button type="button" class="btn primary" id="btn-custom-next">${t("modal.next")}</button>
@@ -1146,7 +1200,7 @@ async function openAddModal() {
   const stepPickers = $("#step-pickers", modal);
   const kindList = $("#kind-list", modal);
   const nextBtn = $("#btn-kind-next", modal);
-  let iconPicker, bgPicker, customReader = null;
+  let iconPicker, bgPicker, customReader = null, updateReader = null;
 
   for (const entry of entries) {
     const kind = entry.kind;
@@ -1204,6 +1258,8 @@ async function openAddModal() {
       if (!customReader) {
         $("#custom-fields", modal).innerHTML = customFieldsHTML("add", {});
         customReader = bindCustomFields(modal, "add");
+        $("#custom-update-fields", modal).innerHTML = updateFieldsHTML("add", {});
+        updateReader = bindUpdateFields(modal, "add");
       }
     } else {
       showPickers((meta.apps[chosenKind] || {}).label || chosenKind);
@@ -1357,6 +1413,7 @@ async function openAddModal() {
     };
     if (chosenKind === "mdbook" || chosenKind === "emulatorjs") body.dir = chosenDir;
     if (chosenKind === "custom" && customReader) body.custom = customReader();
+    if (chosenKind === "custom" && updateReader) body.update = updateReader();
     try {
       await api("/api/cards", {
         method: "POST",
@@ -1396,6 +1453,9 @@ async function openEditModal(card) {
     </div>
     ${launchConfig ? `<div id="edit-custom-fields">${customFieldsHTML("edit", launchConfig, { locked: !isCustom, showInstall: isCustom, showProxy: isCustom })}</div>` : ""}
     ${!isCustom ? `<div class="muted" style="font-size:12px;margin-top:-4px">${t("modal.presetLockedHint")}</div>` : ""}
+    <div>
+      <div id="edit-update-fields">${updateFieldsHTML("edit", card.update)}</div>
+    </div>
     ${canEditGatewayPort ? `
     <div>
       <div class="field-label">${card.kind === "gitvelo" ? t("modal.gitveloGatewayPortLabel") : t("modal.gatewayPortLabel")}</div>
@@ -1419,6 +1479,7 @@ async function openEditModal(card) {
   $("#edit-icon-grid", modal).appendChild(iconPicker.el);
   const bgPicker = bgPickerGrid($("#edit-bg-grid", modal), card.background);
   const customReader = launchConfig ? bindCustomFields(modal, "edit", { locked: !isCustom }) : null;
+  const updateReader = bindUpdateFields(modal, "edit");
   const isGitvelo = card.kind === "gitvelo";
   const gwPortInput = canEditGatewayPort ? $("#edit-gateway-port", modal) : null;
   if (gwPortInput) {
@@ -1450,6 +1511,7 @@ async function openEditModal(card) {
     if (isCustom && customReader && customReader().proxyMode === "path" && !confirm(t("modal.proxyPathWarning"))) {
       return;
     }
+    const updateValue = updateReader();
     btn.disabled = true;
     try {
       const gwMeta = isGitvelo ? meta.gitveloGatewayPort : meta.gatewayPort;
@@ -1470,6 +1532,7 @@ async function openEditModal(card) {
           background: bgPicker.get(),
           ...(proxyInput ? { proxy: proxyInput.checked } : {}),
           ...(isCustom && customReader ? { custom: customReader() } : {}),
+          ...(updateValue.enabled || card.update ? { update: updateValue } : {}),
         }),
       });
       closeModal();

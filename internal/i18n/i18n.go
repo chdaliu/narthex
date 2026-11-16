@@ -458,6 +458,26 @@ autostart 參數:
 		ZHCN: "当前环境不支持安装功能",
 		ZHTW: "目前環境不支援安裝功能",
 	},
+	"err.updateDisabled": {
+		EN:   "update is not enabled on this card",
+		ZHCN: "该卡片未启用更新功能",
+		ZHTW: "該卡片未啟用更新功能",
+	},
+	"err.updateNoCommand": {
+		EN:   "update command is empty",
+		ZHCN: "更新命令为空",
+		ZHTW: "更新命令為空",
+	},
+	"err.updateRunning": {
+		EN:   "an update is already running for this card",
+		ZHCN: "该卡片已有更新任务在运行",
+		ZHTW: "該卡片已有更新任務在執行",
+	},
+	"err.updateNotRunning": {
+		EN:   "no update is running for this card",
+		ZHCN: "该卡片没有正在运行的更新任务",
+		ZHTW: "該卡片沒有正在執行的更新任務",
+	},
 	"err.emulatorNoGame": {
 		EN:   "the selected file is not a recognized game under the configured directories (emulatorjs.dirs)",
 		ZHCN: "所选文件不是配置目录(emulatorjs.dirs)中可识别的游戏",

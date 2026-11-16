@@ -6,7 +6,8 @@
 
 - **超级轻量**:单一静态二进制,前端与素材经 `go:embed` 内嵌,空闲内存 ~10 MB;除 `golang.org/x/crypto` 外零依赖
 - **卡片管理**:图标(38 个 Lucide 图标)与背景(8 张免费图片)可编辑;每个内置应用类型(`comfyui` / `opencode` / `mdbook` / `gitvelo` / `vscode` / `vscodium` / `wetty` / `emulatorjs`)一张卡片,并支持任意数量的**自定义**卡片(仅 mdBook 卡片含项目目录,EmulatorJS 卡片含 ROM 文件,自定义卡片保存自己的程序与命令)
-- **内置预设**:内置卡片与自定义卡片走同一套启动管线,但程序/命令/端口/反代配置为**只读**。只能修改名称、图标、背景,以及该类型原本就支持的反代/网关设置;安装功能仅自定义卡可用。API 会拒绝修改被锁定的启动字段
+- **内置预设**:内置卡片与自定义卡片走同一套启动管线,但程序/命令/端口/反代配置为**只读**。只能修改名称、图标、背景、该类型原本就支持的反代/网关设置以及更新命令;安装功能仅自定义卡可用。API 会拒绝修改被锁定的启动字段
+- **一键更新**:所有卡片都可保存更新命令(默认 `brew upgrade `),在详情弹窗中显示并可一键执行。运行中的卡片会先二次确认;输出写入 `logs/<卡片ID>-update.log`
 - **应用检测**:启动时自动检测已安装的应用;**未安装的不显示**添加入口,无法创建/启动对应卡片
   - `comfyui` 卡片启动 **ComfyUI 服务器**(`python main.py --port <n> --listen 0.0.0.0`),代码目录与解释器从 ComfyUI Desktop 的安装记录解析(`installations.json`,可用 `NARTHEX_COMFY_DESKTOP_DIR` 覆盖);服务器沿用桌面端的存储:透传共享模型路径配置(`--extra-model-paths-config`,因此在桌面端下载的模型无需重新下载即可见)、共享或实例各自的输入/输出目录,以及实例的额外启动参数(如 `--enable-manager`);端口在可配置范围(默认 4100–4299)内自动分配,监听 `0.0.0.0` **支持局域网访问**——「打开」按钮本机为 `http://127.0.0.1:<port>/`,其它设备为 `http://<面板主机>:<port>/`
   - `opencode` 卡片启动 **opencode web 界面**(`opencode serve --port <n> --hostname 0.0.0.0`;opencode v2 移除了 `web` 子命令,v1 CLI 仍以 `opencode web --port <n> --hostname 0.0.0.0` 启动),在浏览器中进行 AI 编程;端口在可配置范围(默认 4300–4499)内自动分配,监听 `0.0.0.0` **支持局域网访问**。因服务绑定非回环地址,首次启动会**自动生成并持久化一个随机密码**(`OPENCODE_SERVER_PASSWORD`,用户名 `opencode`),**用户名、密码与直连 API 地址都显示在卡片详情弹窗中、可点击复制**,serve 首次生成时也会打印。浏览器不直连 opencode:**「打开」URL 指向 narthex 网关**(固定端口 `opencode.gatewayPort`,默认 4399,凭 narthex 会话鉴权;被占用时自动改用空闲端口),由服务端注入 basic-auth 凭据——既无原生弹框,也不会因 opencode 的 `crossorigin` 资源缺陷而白屏。网关监听在整个 serve 生命周期内绑定,因此陈旧的 opencode 标签页总能得到响应(会话失效时重定向登录页,或本地化的「opencode 未运行」页并跳回面板),而不会连接被拒白屏;仅在 opencode 卡片运行时才进行代理。卡片详情弹窗中的 **「API」行**是直连 `http://<主机>:<端口>/` 端点(同一密码),因此 `opencode attach http://<主机>:<端口> --password <密码>`、SDK 等远程客户端可继续使用;启动时**不会在宿主机自动弹出浏览器**——通过「打开」按钮进入
@@ -260,6 +261,9 @@ narthex serve --hostname 127.0.0.1           # 临时
 | POST | `/api/cards/{id}/install` | 执行自定义卡片的安装命令(202,异步) |
 | GET | `/api/cards/{id}/install` | 查询安装状态与输出末尾 |
 | POST | `/api/cards/{id}/install/cancel` | 取消正在运行的安装 |
+| POST | `/api/cards/{id}/update` | 执行卡片的更新命令(202,异步;允许运行中执行) |
+| GET | `/api/cards/{id}/update` | 查询更新状态与输出末尾 |
+| POST | `/api/cards/{id}/update/cancel` | 取消正在运行的更新 |
 | GET | `/api/meta` | 图标/背景(预设+导入)、检测到的应用(`apps`,含 installed/label)与当前设置(含 `internalAddress`) |
 | GET | `/api/mdbook/projects` | 列出配置的 `mdbook.dirs` 及其下识别到的书籍项目(`{dirs, projects:[{name,path}]}`) |
 | POST | `/api/mdbook/projects` | 在配置目录下新建书籍(`{dir, name}`,执行 `mdbook init`) |

@@ -129,6 +129,8 @@ type Service struct {
 	customGatewayWanted map[string]int
 	// installs tracks in-flight and finished install runs of custom cards.
 	installs map[string]*installRun
+	// updates tracks in-flight and finished update runs of any card.
+	updates map[string]*installRun
 	// lastErrors holds the last start/install error shown on a card.
 	lastErrors map[string]string
 	// autoInstallFailed prevents an automatic install from being retried on
@@ -182,6 +184,7 @@ func NewService(dir string, cfg *store.Config, state *store.State, backend procm
 		customGateways:      map[string]*gateway.Server{},
 		customGatewayWanted: map[string]int{},
 		installs:            map[string]*installRun{},
+		updates:             map[string]*installRun{},
 		lastErrors:          map[string]string{},
 		autoInstallFailed:   map[string]bool{},
 		installSem:          make(chan struct{}, 1),
@@ -386,6 +389,11 @@ func (s *Service) Shutdown() {
 			r.cancel()
 		}
 	}
+	for _, r := range s.updates {
+		if r.running && r.cancel != nil {
+			r.cancel()
+		}
+	}
 }
 
 // reconcileGatewayLocked binds each gateway if it is not bound, and rebinds
@@ -524,6 +532,7 @@ type CardCapabilities struct {
 	EditLaunch      bool `json:"editLaunch"`
 	EditProxy       bool `json:"editProxy"`
 	EditGatewayPort bool `json:"editGatewayPort"`
+	EditUpdate      bool `json:"editUpdate"`
 	Install         bool `json:"install"`
 	Delete          bool `json:"delete"`
 	StartStop       bool `json:"startStop"`
@@ -559,6 +568,10 @@ type CardView struct {
 	Installing bool `json:"installing,omitempty"`
 	// InstallError is the localized/raw error of the last failed install.
 	InstallError string `json:"installError,omitempty"`
+	// Updating reports an in-flight update command on any card.
+	Updating bool `json:"updating,omitempty"`
+	// UpdateError is the localized/raw error of the last failed update.
+	UpdateError string `json:"updateError,omitempty"`
 	// LastError is the last start/install error; it survives a poll so the
 	// UI can explain why a card did not start.
 	LastError string `json:"lastError,omitempty"`
@@ -587,6 +600,10 @@ func (s *Service) view(c store.Card, reqHost string) CardView {
 	if r := s.installs[c.ID]; r != nil {
 		v.Installing = r.running
 		v.InstallError = r.errText
+	}
+	if r := s.updates[c.ID]; r != nil {
+		v.Updating = r.running
+		v.UpdateError = r.errText
 	}
 	v.LastError = s.lastErrors[c.ID]
 	st := s.Backend.Status(c.Kind, c.PID, c.Port)
@@ -702,6 +719,7 @@ func capabilitiesFor(kind string) CardCapabilities {
 			EditLaunch:      true,
 			EditProxy:       true,
 			EditGatewayPort: true,
+			EditUpdate:      true,
 			Install:         true,
 			Delete:          true,
 			StartStop:       true,
@@ -712,6 +730,7 @@ func capabilitiesFor(kind string) CardCapabilities {
 		EditLaunch:      false,
 		EditProxy:       proxyCapable(kind),
 		EditGatewayPort: kind == store.KindOpencode || kind == store.KindGitvelo,
+		EditUpdate:      true,
 		Install:         false,
 		Delete:          true,
 		StartStop:       true,

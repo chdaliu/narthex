@@ -105,7 +105,7 @@ func TestBuiltinPresetIsLocked(t *testing.T) {
 		t.Fatalf("launch = %#v", m["launch"])
 	}
 	caps, _ := m["capabilities"].(map[string]any)
-	if caps == nil || caps["editLaunch"] != false || caps["editProxy"] != true || caps["install"] != false {
+	if caps == nil || caps["editLaunch"] != false || caps["editProxy"] != true || caps["editUpdate"] != true || caps["install"] != false {
 		t.Fatalf("capabilities = %#v", m["capabilities"])
 	}
 
@@ -122,6 +122,87 @@ func TestBuiltinPresetIsLocked(t *testing.T) {
 	res, _ = doReq(t, "POST", env.base+"/api/cards/"+id+"/install", cookie, map[string]any{})
 	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("built-in install = %d, want 400", res.StatusCode)
+	}
+}
+
+func TestUpdateCommand(t *testing.T) {
+	env := newTestEnvFull(t, nil, func(s *api.Service) {
+		opencodeInstalled(s)
+	})
+	cookie := loginCookie(t, env.base, testPassword)
+
+	res, m := doReq(t, "POST", env.base+"/api/cards", cookie, map[string]any{
+		"kind": "custom",
+		"custom": map[string]any{
+			"execMode": "shell",
+			"command":  "sleep 30",
+			"portMode": "none",
+		},
+		"update": map[string]any{"enabled": true, "command": "echo updated"},
+	})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("create custom update card = %d %v", res.StatusCode, m)
+	}
+	id := cardID(t, m)
+	res, _ = doReq(t, "POST", env.base+"/api/cards/"+id+"/update", cookie, map[string]any{})
+	if res.StatusCode != http.StatusAccepted {
+		t.Fatalf("update = %d", res.StatusCode)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		res, st := doReq(t, "GET", env.base+"/api/cards/"+id+"/update", cookie, nil)
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("update status = %d", res.StatusCode)
+		}
+		if running, _ := st["running"].(bool); !running {
+			if out, _ := st["output"].(string); !strings.Contains(out, "updated") {
+				t.Fatalf("update output = %q", out)
+			}
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// The update command is editable on built-in cards even though the
+	// launch preset is locked.
+	res, m = doReq(t, "POST", env.base+"/api/cards", cookie, map[string]any{
+		"kind":   "opencode",
+		"update": map[string]any{"enabled": true, "command": "echo opencode-updated"},
+	})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("create builtin update card = %d %v", res.StatusCode, m)
+	}
+	bid := cardID(t, m)
+	res, _ = doReq(t, "PATCH", env.base+"/api/cards/"+bid, cookie, map[string]any{
+		"update": map[string]any{"enabled": true, "command": "echo newer"},
+	})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("patch builtin update = %d", res.StatusCode)
+	}
+	res, _ = doReq(t, "POST", env.base+"/api/cards/"+bid+"/start", cookie, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("start builtin update card = %d", res.StatusCode)
+	}
+	res, _ = doReq(t, "POST", env.base+"/api/cards/"+bid+"/update", cookie, map[string]any{})
+	if res.StatusCode != http.StatusAccepted {
+		t.Fatalf("builtin update while running = %d", res.StatusCode)
+	}
+}
+
+func TestUpdateValidation(t *testing.T) {
+	env := newTestEnv(t)
+	cookie := loginCookie(t, env.base, testPassword)
+	res, _ := doReq(t, "POST", env.base+"/api/cards", cookie, map[string]any{
+		"kind": "custom",
+		"custom": map[string]any{
+			"execMode": "shell",
+			"command":  "sleep 30",
+			"portMode": "none",
+		},
+		"update": map[string]any{"enabled": true, "command": ""},
+	})
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("empty update command = %d, want 400", res.StatusCode)
 	}
 }
 

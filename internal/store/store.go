@@ -579,6 +579,14 @@ type LaunchConfig struct {
 // CustomCard is kept as an alias for the previous name of LaunchConfig.
 type CustomCard = LaunchConfig
 
+// UpdateConfig is the optional one-click update command of a card. It is
+// available for built-in and custom cards; unlike the launch preset it is not
+// locked. An absent or disabled config hides the update action.
+type UpdateConfig struct {
+	Enabled bool   `json:"enabled"`
+	Command string `json:"command"`
+}
+
 // Card is a managed app entry. Built-in kinds have at most one card each
 // (Kind is their identity); custom cards are identified by ID and may be
 // repeated.
@@ -605,6 +613,9 @@ type Card struct {
 	LastPort int `json:"lastPort,omitempty"`
 	// Custom is set for KindCustom cards.
 	Custom *CustomCard `json:"custom,omitempty"`
+	// Update is the optional one-click update command. It applies to every
+	// kind and is independent of the locked launch preset.
+	Update *UpdateConfig `json:"update,omitempty"`
 }
 
 // State is the persisted card list.
