@@ -1,5 +1,7 @@
 package procman
 
+import "narthex/internal/store"
+
 // Status is the live state of a managed instance.
 type Status struct {
 	Alive    bool
@@ -7,17 +9,31 @@ type Status struct {
 	MemoryKB int64
 }
 
-// Backend starts, stops and inspects managed instances.
-type Backend interface {
-	// Start launches the app/server for the given kind (see store.Kind*).
-	// id identifies the card; the backend is responsible for writing logs
-	// to <log dir>/<id>.log. hosts lists the browser-side hostnames the
-	// card will be opened from (empty for purely local use); servers with
-	// origin checks (WeTTY >= 4) derive their trusted origins from it.
-	// noAuth asks the app's server to skip its own login gate so it can be
+// StartSpec describes one instance launch. It replaces the old positional
+// Start arguments so custom cards can carry their own configuration
+// (program, command, port mode, proxy mode) without widening the interface
+// again.
+type StartSpec struct {
+	// Card is the card being started (Kind, ID and custom configuration).
+	Card store.Card
+	// Dir is the working directory resolved by the API for built-in kinds.
+	Dir string
+	// Hosts lists the browser-side hostnames the card will be opened from
+	// (empty for purely local use); servers with origin checks (WeTTY >= 4)
+	// derive their trusted origins from it.
+	Hosts []string
+	// NoAuth asks the app's server to skip its own login gate so it can be
 	// fronted by the narthex gateway (gitvelo proxy mode); it is ignored by
 	// kinds whose server has no such switch.
-	Start(kind, dir, id string, hosts []string, noAuth bool) (pid int, port int, err error)
+	NoAuth bool
+}
+
+// Backend starts, stops and inspects managed instances.
+type Backend interface {
+	// Start launches the app/server described by spec. The backend writes
+	// logs to <log dir>/<card ID>.log and returns the runtime port (0 for
+	// cards that use no port).
+	Start(spec StartSpec) (pid int, port int, err error)
 	// Stop terminates the instance with pid.
 	Stop(pid int) error
 	// Status reports the live state of the instance.

@@ -212,6 +212,9 @@ func cmdServe(args []string) error {
 	backend.EmulatorPortRange = cfg.EmulatorJS.PortRange
 	backend.EmulatorDataDir = resolveFromDir(dir, cfg.EmulatorJS.DataPath)
 	backend.EmulatorCDNVersion = cfg.EmulatorJS.CDNVersion
+	backend.CustomHostname = cfg.Custom.Hostname
+	backend.CustomPortRange = cfg.Custom.PortRange
+	backend.CustomPathDirs = cfg.Custom.PathDirs
 
 	state, err := store.LoadState(filepath.Join(dir, store.StateFile))
 	if err != nil {
@@ -233,6 +236,7 @@ func cmdServe(args []string) error {
 	srv := server.New(cfg, svc)
 	svc.GatewayHandler = srv.GatewayHandler
 	svc.GitveloGatewayHandler = srv.GitveloGatewayHandler
+	svc.CustomGatewayHandler = srv.CustomGatewayHandler
 
 	addr := net.JoinHostPort(cfg.Hostname, strconv.Itoa(cfg.Port))
 	if conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond); err == nil {

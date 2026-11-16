@@ -152,7 +152,7 @@ func TestComfyUILifecycle(t *testing.T) {
 		LogDir:    logDir,
 	}
 
-	pid, port, err := m.Start("comfyui", install, "cf1", nil, false)
+	pid, port, err := startForTest(m, "comfyui", install, "cf1", nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,12 +190,12 @@ func TestComfyUIErrors(t *testing.T) {
 
 	// Directory without main.py.
 	empty := t.TempDir()
-	if _, _, err := m.Start("comfyui", empty, "x", nil, false); err == nil {
+	if _, _, err := startForTest(m, "comfyui", empty, "x", nil, false); err == nil {
 		t.Fatal("start in a dir without main.py should error")
 	}
 
 	// Unknown kind.
-	if _, _, err := m.Start("wechat", t.TempDir(), "x", nil, false); err == nil {
+	if _, _, err := startForTest(m, "wechat", t.TempDir(), "x", nil, false); err == nil {
 		t.Fatal("unknown kind should error")
 	}
 }
@@ -442,7 +442,7 @@ func TestComfyUIStartPassesDesktopArgs(t *testing.T) {
 
 	logDir := t.TempDir()
 	m := &Manager{Hostname: "127.0.0.1", PortRange: [2]int{4180, 4189}, LogDir: logDir}
-	pid, _, err := m.Start("comfyui", codeDir, "cfargs", nil, false)
+	pid, _, err := startForTest(m, "comfyui", codeDir, "cfargs", nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -273,6 +273,11 @@ autostart 參數:
 		ZHCN: "上传不存在",
 		ZHTW: "上傳不存在",
 	},
+	"err.crossOrigin": {
+		EN:   "cross-origin request rejected",
+		ZHCN: "已拒绝跨源请求",
+		ZHTW: "已拒絕跨來源請求",
+	},
 	"err.kindUnsupported": {
 		EN:   "unsupported service type: %s",
 		ZHCN: "不支持的服务类型: %s",
@@ -342,6 +347,111 @@ autostart 參數:
 		EN:   "stop the GitVelo card before switching the reverse proxy (the startup mode changes)",
 		ZHCN: "请先停止 GitVelo 卡片再切换反向代理(启动模式会随之改变)",
 		ZHTW: "請先停止 GitVelo 卡片再切換反向代理(啟動模式會隨之改變)",
+	},
+	"gateway.customStoppedTitle": {
+		EN:   "custom app is not running",
+		ZHCN: "自定义应用未运行",
+		ZHTW: "自訂應用程式未執行",
+	},
+	"gateway.customStoppedBody": {
+		EN:   "The custom app has stopped. Returning to the Narthex dashboard...",
+		ZHCN: "自定义应用已停止,正在返回 Narthex 面板...",
+		ZHTW: "自訂應用程式已停止,正在返回 Narthex 面板...",
+	},
+	"err.customRequired": {
+		EN:   "custom card configuration is required",
+		ZHCN: "缺少自定义卡片配置",
+		ZHTW: "缺少自訂卡片設定",
+	},
+	"err.customTooLong": {
+		EN:   "a custom field is too long",
+		ZHCN: "自定义字段过长",
+		ZHTW: "自訂欄位過長",
+	},
+	"err.customExecRequired": {
+		EN:   "program path is required in args mode",
+		ZHCN: "参数模式必须填写程序路径",
+		ZHTW: "參數模式必須填寫程式路徑",
+	},
+	"err.customCommandRequired": {
+		EN:   "shell command is required in shell mode",
+		ZHCN: "Shell 模式必须填写启动命令",
+		ZHTW: "Shell 模式必須填寫啟動命令",
+	},
+	"err.customExecNotFound": {
+		EN:   "program not found: %s",
+		ZHCN: "找不到程序: %s",
+		ZHTW: "找不到程式: %s",
+	},
+	"err.customPortInvalid": {
+		EN:   "invalid port (1-65535)",
+		ZHCN: "无效端口(1-65535)",
+		ZHTW: "無效連接埠(1-65535)",
+	},
+	"err.customPortConflict": {
+		EN:   "that port is already reserved by another card or the dashboard",
+		ZHCN: "该端口已被其他卡片或面板占用",
+		ZHTW: "該連接埠已被其他卡片或面板佔用",
+	},
+	"err.customPortInUse": {
+		EN:   "port %d is already in use",
+		ZHCN: "端口 %d 已被占用",
+		ZHTW: "連接埠 %d 已被佔用",
+	},
+	"err.customProxyNeedsPort": {
+		EN:   "reverse proxy requires a port (do not use port mode none)",
+		ZHCN: "反向代理需要端口(不能选择不使用端口)",
+		ZHTW: "反向代理需要連接埠(不能選擇不使用連接埠)",
+	},
+	"err.customGatewayPortInvalid": {
+		EN:   "invalid gateway port (1-65535, and not the dashboard port)",
+		ZHCN: "无效的网关端口(1-65535,且不能是面板端口)",
+		ZHTW: "無效的閘道連接埠(1-65535,且不能是面板連接埠)",
+	},
+	"err.customGatewayPortConflict": {
+		EN:   "that gateway port is already reserved by another custom card",
+		ZHCN: "该网关端口已被其他自定义卡片占用",
+		ZHTW: "該閘道連接埠已被其他自訂卡片佔用",
+	},
+	"err.customGatewayPortUnavailable": {
+		EN:   "no free custom gateway port in the configured range",
+		ZHCN: "配置范围内没有可用的自定义网关端口",
+		ZHTW: "設定範圍內沒有可用的自訂閘道連接埠",
+	},
+	"err.customEditRunning": {
+		EN:   "stop the custom card before changing its program, command, workdir or port",
+		ZHCN: "请先停止自定义卡片再修改程序、命令、工作目录或端口",
+		ZHTW: "請先停止自訂卡片再修改程式、命令、工作目錄或連接埠",
+	},
+	"err.installDisabled": {
+		EN:   "install is not enabled on this card",
+		ZHCN: "该卡片未启用安装功能",
+		ZHTW: "該卡片未啟用安裝功能",
+	},
+	"err.installNoCommand": {
+		EN:   "install command is empty",
+		ZHCN: "安装命令为空",
+		ZHTW: "安裝命令為空",
+	},
+	"err.installCardRunning": {
+		EN:   "stop the card before installing",
+		ZHCN: "请先停止卡片再安装",
+		ZHTW: "請先停止卡片再安裝",
+	},
+	"err.installRunning": {
+		EN:   "an install is already running for this card",
+		ZHCN: "该卡片已有安装任务在运行",
+		ZHTW: "該卡片已有安裝任務在執行",
+	},
+	"err.installNotRunning": {
+		EN:   "no install is running for this card",
+		ZHCN: "该卡片没有正在运行的安装任务",
+		ZHTW: "該卡片沒有正在執行的安裝任務",
+	},
+	"err.installUnsupported": {
+		EN:   "install is not available on this host",
+		ZHCN: "当前环境不支持安装功能",
+		ZHTW: "目前環境不支援安裝功能",
 	},
 	"err.emulatorNoGame": {
 		EN:   "the selected file is not a recognized game under the configured directories (emulatorjs.dirs)",

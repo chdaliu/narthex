@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/subtle"
 	"fmt"
 	"io/fs"
@@ -116,11 +117,45 @@ type Service struct {
 	gv gateway.Server
 	// gvWanted mirrors gwWanted for the gitvelo gateway.
 	gvWanted int
+	// CustomGatewayHandler builds the authenticated gateway handler for one
+	// custom card (dedicated listener). Injected in cmd/narthex; nil in
+	// tests disables custom gateway lifecycle.
+	CustomGatewayHandler func(id string) http.Handler
+	// customGateways holds the dedicated gateway listeners of custom cards
+	// in gateway proxy mode, keyed by card ID, bound for the serve lifetime.
+	customGateways map[string]*gateway.Server
+	// customGatewayWanted records the preferred port each custom gateway
+	// was bound for, so config changes can be applied on restart.
+	customGatewayWanted map[string]int
+	// installs tracks in-flight and finished install runs of custom cards.
+	installs map[string]*installRun
+	// lastErrors holds the last start/install error shown on a card.
+	lastErrors map[string]string
+	// autoInstallFailed prevents an automatic install from being retried on
+	// every start after it failed, until a manual install or an edit clears
+	// it.
+	autoInstallFailed map[string]bool
+	// installSem serializes install commands so package managers never run
+	// concurrently.
+	installSem chan struct{}
+	// RunInstall executes an install command. Defaults to
+	// procman.RunInstall; overridable in tests.
+	RunInstall func(ctx context.Context, command, dir, logPath string, pathDirs []string) error
 }
 
 // NewService builds a Service. State and config are already loaded by the
 // caller and remain owned by it.
 func NewService(dir string, cfg *store.Config, state *store.State, backend procman.Backend, username string) *Service {
+	def := store.DefaultConfig()
+	if cfg.Custom.Hostname == "" {
+		cfg.Custom.Hostname = def.Custom.Hostname
+	}
+	if cfg.Custom.PortRange == [2]int{0, 0} {
+		cfg.Custom.PortRange = def.Custom.PortRange
+	}
+	if cfg.Custom.GatewayPortRange == [2]int{0, 0} {
+		cfg.Custom.GatewayPortRange = def.Custom.GatewayPortRange
+	}
 	return &Service{
 		Dir:            dir,
 		Config:         cfg,
@@ -135,15 +170,22 @@ func NewService(dir string, cfg *store.Config, state *store.State, backend procm
 		MdbookCreate: func(parent, name string) error {
 			return procman.CreateMdbookProject(procman.DetectMdbook(), parent, name)
 		},
-		GitveloBin:    procman.DetectGitvelo,
-		VscodeBin:     procman.DetectVSCode,
-		VscodiumBin:   procman.DetectVSCodium,
-		WettyBin:      procman.DetectWetty,
-		EmulatorGames: procman.DetectEmulatorGames,
-		BrewManaged:   autostart.BrewManaged,
-		Username:      username,
-		RestartDelay:  500 * time.Millisecond,
-		BootID:        store.RandomID(8),
+		GitveloBin:          procman.DetectGitvelo,
+		VscodeBin:           procman.DetectVSCode,
+		VscodiumBin:         procman.DetectVSCodium,
+		WettyBin:            procman.DetectWetty,
+		EmulatorGames:       procman.DetectEmulatorGames,
+		BrewManaged:         autostart.BrewManaged,
+		Username:            username,
+		RestartDelay:        500 * time.Millisecond,
+		BootID:              store.RandomID(8),
+		customGateways:      map[string]*gateway.Server{},
+		customGatewayWanted: map[string]int{},
+		installs:            map[string]*installRun{},
+		lastErrors:          map[string]string{},
+		autoInstallFailed:   map[string]bool{},
+		installSem:          make(chan struct{}, 1),
+		RunInstall:          procman.RunInstall,
 	}
 }
 
@@ -243,12 +285,70 @@ func (s *Service) GitveloGatewayTarget() (addr string, ok bool) {
 	return "", false
 }
 
+// CustomGatewayTarget resolves a running custom card for its dedicated
+// gateway listener. ok is false when the card is stopped, has no port, or is
+// not in gateway proxy mode.
+func (s *Service) CustomGatewayTarget(id string) (addr string, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.State.Cards {
+		c := &s.State.Cards[i]
+		if c.ID != id || c.Kind != store.KindCustom || c.Custom == nil {
+			continue
+		}
+		if c.Custom.ProxyMode != store.CustomProxyGateway || c.Port <= 0 {
+			return "", false
+		}
+		if !s.Backend.Status(c.Kind, c.PID, c.Port).Alive {
+			return "", false
+		}
+		return net.JoinHostPort("127.0.0.1", strconv.Itoa(c.Port)), true
+	}
+	return "", false
+}
+
+// CustomPathGatewayTarget resolves a running custom card for the same-origin
+// /custom/<id>/ proxy.
+func (s *Service) CustomPathGatewayTarget(id string) (addr string, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.State.Cards {
+		c := &s.State.Cards[i]
+		if c.ID != id || c.Kind != store.KindCustom || c.Custom == nil {
+			continue
+		}
+		if c.Custom.ProxyMode != store.CustomProxyPath || c.Port <= 0 {
+			return "", false
+		}
+		if !s.Backend.Status(c.Kind, c.PID, c.Port).Alive {
+			return "", false
+		}
+		return net.JoinHostPort("127.0.0.1", strconv.Itoa(c.Port)), true
+	}
+	return "", false
+}
+
+// CustomGatewayPort returns the actual bound port of a custom card's
+// dedicated gateway, or 0 when it is not bound.
+func (s *Service) CustomGatewayPort(id string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.customGatewayPortLocked(id)
+}
+
+func (s *Service) customGatewayPortLocked(id string) int {
+	if g := s.customGateways[id]; g != nil {
+		return g.Port()
+	}
+	return 0
+}
+
 // proxyCapable reports whether kind supports the per-card reverse-proxy
 // toggle: its "Open" URL can be either the same-origin narthex proxy or the
 // app's own direct URL.
 func proxyCapable(kind string) bool {
 	switch kind {
-	case store.KindMdbook, store.KindEmulatorJS, store.KindOpencode, store.KindGitvelo:
+	case store.KindMdbook, store.KindEmulatorJS, store.KindOpencode, store.KindGitvelo, store.KindCustom:
 		return true
 	}
 	return false
@@ -276,6 +376,16 @@ func (s *Service) Shutdown() {
 	s.gv.Stop()
 	s.GitveloGatewayPort = 0
 	s.gvWanted = 0
+	for id, g := range s.customGateways {
+		g.Stop()
+		delete(s.customGateways, id)
+		delete(s.customGatewayWanted, id)
+	}
+	for _, r := range s.installs {
+		if r.running && r.cancel != nil {
+			r.cancel()
+		}
+	}
 }
 
 // reconcileGatewayLocked binds each gateway if it is not bound, and rebinds
@@ -286,6 +396,65 @@ func (s *Service) Shutdown() {
 func (s *Service) reconcileGatewayLocked() {
 	s.reconcileOpencodeGatewayLocked()
 	s.reconcileGitveloGatewayLocked()
+	s.reconcileCustomGatewaysLocked()
+}
+
+// reconcileCustomGatewaysLocked keeps one dedicated gateway listener bound
+// for every custom card in gateway proxy mode. Listeners stay bound while the
+// app is stopped so a stale tab receives the localized stopped page. Caller
+// holds s.mu.
+func (s *Service) reconcileCustomGatewaysLocked() {
+	if s.CustomGatewayHandler == nil {
+		return
+	}
+	want := map[string]int{}
+	for i := range s.State.Cards {
+		c := &s.State.Cards[i]
+		if c.Kind != store.KindCustom || c.Custom == nil || c.Custom.ProxyMode != store.CustomProxyGateway {
+			continue
+		}
+		want[c.ID] = c.Custom.GatewayPort
+	}
+	for id, g := range s.customGateways {
+		preferred, keep := want[id]
+		if !keep {
+			g.Stop()
+			delete(s.customGateways, id)
+			delete(s.customGatewayWanted, id)
+			continue
+		}
+		if s.customGatewayWanted[id] != preferred && g.Port() != 0 && !s.customCardRunningLocked(id) {
+			g.Stop()
+			delete(s.customGateways, id)
+			delete(s.customGatewayWanted, id)
+		}
+	}
+	for id, preferred := range want {
+		if s.customGateways[id] != nil {
+			continue
+		}
+		g := &gateway.Server{}
+		p, err := g.Start(s.Config.Hostname, preferred, s.CustomGatewayHandler(id))
+		if err != nil {
+			log.Printf("custom gateway %s: %v", id, err)
+			continue
+		}
+		s.customGateways[id] = g
+		s.customGatewayWanted[id] = preferred
+		if preferred > 0 && p != preferred {
+			log.Printf("custom gateway %s: port %d in use, using %d instead", id, preferred, p)
+		}
+	}
+}
+
+func (s *Service) customCardRunningLocked(id string) bool {
+	for i := range s.State.Cards {
+		c := &s.State.Cards[i]
+		if c.ID == id {
+			return s.Backend.Status(c.Kind, c.PID, c.Port).Alive
+		}
+	}
+	return false
 }
 
 // reconcileOpencodeGatewayLocked is the opencode half of
@@ -364,6 +533,13 @@ type CardView struct {
 	// only set for opencode cards.
 	Username string `json:"username,omitempty"`
 	Password string `json:"password,omitempty"`
+	// Installing reports an in-flight install command for a custom card.
+	Installing bool `json:"installing,omitempty"`
+	// InstallError is the localized/raw error of the last failed install.
+	InstallError string `json:"installError,omitempty"`
+	// LastError is the last start/install error; it survives a poll so the
+	// UI can explain why a card did not start.
+	LastError string `json:"lastError,omitempty"`
 }
 
 func (s *Service) view(c store.Card, reqHost string) CardView {
@@ -379,6 +555,11 @@ func (s *Service) view(c store.Card, reqHost string) CardView {
 		// The web UI asks for the connection token only (no username).
 		v.Password = s.Config.Vscodium.ConnectionToken
 	}
+	if r := s.installs[c.ID]; r != nil {
+		v.Installing = r.running
+		v.InstallError = r.errText
+	}
+	v.LastError = s.lastErrors[c.ID]
 	st := s.Backend.Status(c.Kind, c.PID, c.Port)
 	v.Running = st.Alive
 	if st.Alive {
@@ -391,7 +572,11 @@ func (s *Service) view(c store.Card, reqHost string) CardView {
 		// is built from the visitor's request host so it works from other
 		// devices. An explicitly configured internal network address wins
 		// over the request host.
-		v.URL = s.instanceURL(reqHost, c.Kind, c.Port, proxyCapable(c.Kind) && !c.DisableProxy)
+		proxy := proxyCapable(c.Kind) && !c.DisableProxy
+		if c.Kind == store.KindCustom && c.Custom != nil {
+			proxy = c.Custom.ProxyMode != store.CustomProxyOff
+		}
+		v.URL = s.instanceURL(reqHost, c, proxy)
 		if c.Kind == store.KindOpencode {
 			v.APIURL = s.directURL(reqHost, c.Kind, c.Port)
 		}
@@ -406,7 +591,8 @@ func (s *Service) view(c store.Card, reqHost string) CardView {
 // emulatorjs, opencode, gitvelo) return the proxy URL when proxy is on and
 // their direct port URL otherwise; the VS Code-family kinds append their
 // connection token (`?tkn=`) because the server answers 403 without it.
-func (s *Service) instanceURL(reqHost, kind string, port int, proxy bool) string {
+func (s *Service) instanceURL(reqHost string, card store.Card, proxy bool) string {
+	kind, port := card.Kind, card.Port
 	if kind == store.KindMdbook && proxy {
 		// mdBook is proxied same-origin under the dashboard listener, so
 		// the book is reachable through the same reverse proxy / tunnel as
@@ -418,6 +604,23 @@ func (s *Service) instanceURL(reqHost, kind string, port int, proxy bool) string
 		// EmulatorJS is proxied same-origin under the dashboard listener the
 		// same way; the child server's direct port is used when proxy is off.
 		return gateway.EmulatorPrefix + "/"
+	}
+	if kind == store.KindCustom {
+		if port <= 0 || card.Custom == nil {
+			return ""
+		}
+		switch card.Custom.ProxyMode {
+		case store.CustomProxyPath:
+			return gateway.CustomPrefix + "/" + card.ID + "/"
+		case store.CustomProxyGateway:
+			gp := s.customGatewayPortLocked(card.ID)
+			if gp == 0 {
+				return ""
+			}
+			return s.baseURLForHost(reqHost, s.hostForListen(s.Config.Hostname, reqHost), gp)
+		default:
+			return s.baseURL(reqHost, kind, port)
+		}
 	}
 	if kind == store.KindOpencode && proxy && s.GatewayPort > 0 {
 		port = s.GatewayPort
@@ -541,6 +744,8 @@ func (s *Service) listenHost(kind string) string {
 		host = s.Config.Wetty.Hostname
 	case store.KindEmulatorJS:
 		host = s.Config.EmulatorJS.Hostname
+	case store.KindCustom:
+		host = s.Config.Custom.Hostname
 	}
 	return host
 }
@@ -947,6 +1152,7 @@ func (s *Service) HandleMeta(w http.ResponseWriter, r *http.Request) {
 		store.KindVSCodium:   s.appInfoFor(store.KindVSCodium),
 		store.KindWetty:      s.appInfoFor(store.KindWetty),
 		store.KindEmulatorJS: s.appInfoFor(store.KindEmulatorJS),
+		store.KindCustom:     s.appInfoFor(store.KindCustom),
 	}
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"icons":              assetNames("assets/icons", ".svg"),

@@ -3,12 +3,14 @@ package server
 
 import (
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 
 	"narthex/internal/api"
 	"narthex/internal/auth"
 	"narthex/internal/gateway"
+	"narthex/internal/i18n"
 	"narthex/internal/store"
 	"narthex/web"
 )
@@ -41,6 +43,9 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("DELETE /api/cards/{id}", s.svc.HandleDeleteCard)
 	protected.HandleFunc("POST /api/cards/{id}/start", s.svc.HandleStartCard)
 	protected.HandleFunc("POST /api/cards/{id}/stop", s.svc.HandleStopCard)
+	protected.HandleFunc("POST /api/cards/{id}/install", s.svc.HandleInstallCard)
+	protected.HandleFunc("GET /api/cards/{id}/install", s.svc.HandleInstallStatus)
+	protected.HandleFunc("POST /api/cards/{id}/install/cancel", s.svc.HandleCancelInstall)
 	protected.HandleFunc("GET /api/meta", s.svc.HandleMeta)
 	protected.HandleFunc("GET /api/mdbook/projects", s.svc.HandleMdbookProjects)
 	protected.HandleFunc("POST /api/mdbook/projects", s.svc.HandleMdbookCreate)
@@ -65,6 +70,10 @@ func (s *Server) Handler() http.Handler {
 	// The running EmulatorJS server is proxied same-origin as well.
 	mux.Handle(gateway.EmulatorPrefix+"/", s.EmulatorHandler())
 
+	// Custom cards in path proxy mode are proxied same-origin under
+	// /custom/<cardID>/.
+	mux.Handle(gateway.CustomPrefix+"/", s.CustomHandler())
+
 	mux.Handle("/uploads/", s.uploadsHandler())
 	mux.Handle("/", staticHandler())
 	return mux
@@ -83,6 +92,20 @@ func (s *Server) MdbookHandler() http.Handler {
 func (s *Server) EmulatorHandler() http.Handler {
 	return gateway.EmulatorHandler(s.cfg, s.svc.Lang, func() (string, bool) {
 		return s.svc.EmulatorGatewayTarget()
+	})
+}
+
+// CustomHandler returns the same-origin reverse proxy for custom cards in
+// path proxy mode.
+func (s *Server) CustomHandler() http.Handler {
+	return gateway.CustomPathHandler(s.cfg, s.svc.Lang, s.svc.CustomPathGatewayTarget)
+}
+
+// CustomGatewayHandler returns the dedicated-listener reverse proxy for one
+// custom card in gateway proxy mode.
+func (s *Server) CustomGatewayHandler(id string) http.Handler {
+	return gateway.CustomHandler(s.cfg, s.svc.Lang, func() (string, bool) {
+		return s.svc.CustomGatewayTarget(id)
 	})
 }
 
@@ -113,8 +136,67 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			api.WriteJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
+		if isMutatingMethod(r.Method) && !sameOriginRequest(r, s.cfg) {
+			// A custom app in gateway proxy mode shares the cookie host but
+			// is a different origin; reject its cross-origin mutations (and
+			// install commands) even though the session cookie is sent.
+			api.WriteJSON(w, http.StatusForbidden, map[string]string{"error": i18n.T(s.svc.Lang(), "err.crossOrigin")})
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isMutatingMethod(method string) bool {
+	switch method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return true
+	}
+	return false
+}
+
+// sameOriginRequest rejects browser requests whose Origin or Sec-Fetch-Site
+// says they come from another origin/site. Requests without either header
+// (curl, CLI clients, tests) are allowed.
+func sameOriginRequest(r *http.Request, cfg *store.Config) bool {
+	if site := r.Header.Get("Sec-Fetch-Site"); site != "" {
+		switch site {
+		case "same-origin", "none":
+		default:
+			return false
+		}
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return originAllowedHost(u.Host, r.Host) || originAllowedHost(u.Host, cfg.InternalAddress)
+}
+
+// originAllowedHost compares the Origin authority (host:port) with a
+// candidate authority. Ports matter: a custom app on its own gateway port is
+// a different origin even though the host name is the same.
+func originAllowedHost(originHost, candidate string) bool {
+	if candidate == "" {
+		return false
+	}
+	candidate = strings.TrimPrefix(candidate, "http://")
+	candidate = strings.TrimPrefix(candidate, "https://")
+	if i := strings.IndexAny(candidate, "/?#"); i >= 0 {
+		candidate = candidate[:i]
+	}
+	// Browsers omit default ports from Origin; normalize both sides.
+	normalize := func(h string) string {
+		h = strings.TrimSpace(h)
+		h = strings.TrimSuffix(h, ":80")
+		h = strings.TrimSuffix(h, ":443")
+		return strings.ToLower(h)
+	}
+	return normalize(originHost) == normalize(candidate) && normalize(candidate) != ""
 }
 
 func cookieValue(r *http.Request) string {

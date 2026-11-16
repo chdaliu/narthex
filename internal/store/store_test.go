@@ -115,6 +115,35 @@ func TestStateRoundtrip(t *testing.T) {
 	}
 }
 
+func TestLoadStateKeepsMultipleCustomCards(t *testing.T) {
+	path := filepath.Join(t.TempDir(), StateFile)
+	s := &State{Cards: []Card{
+		{ID: "c1", Kind: KindCustom, Custom: &CustomCard{Exec: "one"}},
+		{ID: "c2", Kind: KindCustom, Custom: &CustomCard{Exec: "two", ProxyMode: CustomProxyPath}},
+		{ID: "c1", Kind: KindCustom, Custom: &CustomCard{Exec: "duplicate"}},
+		{ID: "c3", Kind: KindCustom},
+	}}
+	if err := SaveState(path, s); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadState(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Cards) != 3 {
+		t.Fatalf("custom cards = %d, want 3: %+v", len(got.Cards), got.Cards)
+	}
+	if got.Cards[0].Custom == nil || got.Cards[0].Custom.ExecMode != CustomExecArgs || got.Cards[0].Custom.PortMode != CustomPortAuto || got.Cards[0].Custom.ProxyMode != CustomProxyOff {
+		t.Fatalf("custom defaults not normalized: %+v", got.Cards[0].Custom)
+	}
+	if got.Cards[1].Custom == nil || got.Cards[1].Custom.ProxyMode != CustomProxyPath {
+		t.Fatalf("custom proxy mode lost: %+v", got.Cards[1].Custom)
+	}
+	if got.Cards[2].Custom == nil {
+		t.Fatalf("missing custom config not filled: %+v", got.Cards[2])
+	}
+}
+
 func TestLoadStateKeepsOneCardPerKind(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, StateFile)

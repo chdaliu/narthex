@@ -1,0 +1,247 @@
+package api
+
+import (
+	"context"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"narthex/internal/procman"
+	"narthex/internal/store"
+)
+
+const installTimeout = 30 * time.Minute
+const installOutputLimit = 64 << 10
+
+// installRun is the in-memory state of one install command. It is not
+// persisted: an install interrupted by a narthex restart is reported as gone
+// rather than "running" forever.
+type installRun struct {
+	cardID     string
+	running    bool
+	command    string
+	dir        string
+	logPath    string
+	pathDirs   []string
+	autoStart  bool
+	startedAt  time.Time
+	finishedAt time.Time
+	exitCode   int
+	errText    string
+	ctx        context.Context
+	cancel     context.CancelFunc
+}
+
+// HandleInstallCard runs a custom card's install command asynchronously.
+func (s *Service) HandleInstallCard(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	s.mu.Lock()
+	idx := s.findCard(id)
+	if idx < 0 {
+		s.mu.Unlock()
+		s.writeError(w, http.StatusNotFound, "err.cardNotFound")
+		return
+	}
+	card := &s.State.Cards[idx]
+	st, errKey := s.beginInstallLocked(card, false, s.browserHosts(r.Host))
+	if errKey != "" {
+		s.mu.Unlock()
+		status := http.StatusBadRequest
+		if errKey == "err.installRunning" || errKey == "err.installCardRunning" {
+			status = http.StatusConflict
+		}
+		s.writeError(w, status, errKey)
+		return
+	}
+	s.mu.Unlock()
+	go s.runInstall(st, card.ID, false, s.browserHosts(r.Host))
+	WriteJSON(w, http.StatusAccepted, s.installStatus(st))
+}
+
+// HandleInstallStatus reports the current/last install run and its log tail.
+func (s *Service) HandleInstallStatus(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	s.mu.Lock()
+	st := s.installs[id]
+	s.mu.Unlock()
+	if st == nil {
+		WriteJSON(w, http.StatusOK, map[string]any{"running": false, "output": ""})
+		return
+	}
+	WriteJSON(w, http.StatusOK, s.installStatus(st))
+}
+
+// HandleCancelInstall cancels a running install command.
+func (s *Service) HandleCancelInstall(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	s.mu.Lock()
+	st := s.installs[id]
+	if st == nil || !st.running {
+		s.mu.Unlock()
+		s.writeError(w, http.StatusConflict, "err.installNotRunning")
+		return
+	}
+	if st.cancel != nil {
+		st.cancel()
+	}
+	s.mu.Unlock()
+	WriteJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// beginInstallLocked validates and registers an install run. Caller holds
+// s.mu.
+func (s *Service) beginInstallLocked(card *store.Card, autoStart bool, hosts []string) (*installRun, string) {
+	if card.Kind != store.KindCustom || card.Custom == nil {
+		return nil, "err.installDisabled"
+	}
+	if !card.Custom.InstallEnabled {
+		return nil, "err.installDisabled"
+	}
+	if strings.TrimSpace(card.Custom.InstallCommand) == "" {
+		return nil, "err.installNoCommand"
+	}
+	if s.Backend.Status(card.Kind, card.PID, card.Port).Alive {
+		return nil, "err.installCardRunning"
+	}
+	if old := s.installs[card.ID]; old != nil && old.running {
+		return nil, "err.installRunning"
+	}
+	if s.RunInstall == nil {
+		return nil, "err.installUnsupported"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), installTimeout)
+	st := &installRun{
+		cardID:    card.ID,
+		running:   true,
+		command:   card.Custom.InstallCommand,
+		dir:       s.installDir(card.Kind, card.Dir),
+		logPath:   filepath.Join(s.Dir, store.LogsDir, card.ID+"-install.log"),
+		pathDirs:  append([]string(nil), s.Config.Custom.PathDirs...),
+		autoStart: autoStart,
+		startedAt: time.Now(),
+		ctx:       ctx,
+		cancel:    cancel,
+	}
+	if card.Custom.WorkDir != "" {
+		st.dir = store.ExpandPath(s.Dir, card.Custom.WorkDir)
+	}
+	s.installs[card.ID] = st
+	delete(s.autoInstallFailed, card.ID)
+	delete(s.lastErrors, card.ID)
+	return st, ""
+}
+
+// runInstall executes a registered install and, for auto installs, starts
+// the card when it succeeds. It never holds s.mu while the command runs.
+func (s *Service) runInstall(st *installRun, cardID string, autoStart bool, hosts []string) {
+	select {
+	case s.installSem <- struct{}{}:
+		defer func() { <-s.installSem }()
+	case <-st.ctx.Done():
+		s.finishInstall(st, st.ctx.Err(), false, hosts)
+		return
+	}
+
+	err := s.RunInstall(st.ctx, st.command, st.dir, st.logPath, st.pathDirs)
+	s.finishInstall(st, err, autoStart, hosts)
+}
+
+func (s *Service) finishInstall(st *installRun, err error, autoStart bool, hosts []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if st.cancel != nil {
+		st.cancel()
+	}
+	st.running = false
+	st.finishedAt = time.Now()
+	if err != nil {
+		st.errText = err.Error()
+		if ee, ok := err.(*exec.ExitError); ok {
+			st.exitCode = ee.ExitCode()
+		}
+		s.autoInstallFailed[st.cardID] = autoStart
+		return
+	}
+	st.errText = ""
+	delete(s.autoInstallFailed, st.cardID)
+	if !autoStart {
+		return
+	}
+	idx := s.findCard(st.cardID)
+	if idx < 0 {
+		return
+	}
+	card := &s.State.Cards[idx]
+	if s.Backend.Status(card.Kind, card.PID, card.Port).Alive {
+		return
+	}
+	reqHost := ""
+	if len(hosts) > 0 {
+		reqHost = hosts[0]
+	}
+	if _, errKey, startErr := s.startCardLocked(card, reqHost); errKey != "" {
+		s.autoInstallFailed[st.cardID] = true
+		if startErr != nil {
+			s.lastErrors[st.cardID] = startErr.Error()
+		}
+	}
+}
+
+func (s *Service) installStatus(st *installRun) map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := readTail(st.logPath, installOutputLimit)
+	return map[string]any{
+		"running":  st.running,
+		"exitCode": st.exitCode,
+		"error":    st.errText,
+		"output":   out,
+		"logPath":  st.logPath,
+	}
+}
+
+// needsAutoInstallLocked reports whether a custom start should run the
+// install command first because its configured program is missing.
+func (s *Service) needsAutoInstallLocked(card *store.Card) bool {
+	if card.Kind != store.KindCustom || card.Custom == nil {
+		return false
+	}
+	c := card.Custom
+	if !c.InstallEnabled || !c.InstallAuto {
+		return false
+	}
+	if strings.TrimSpace(c.Exec) == "" {
+		// Shell mode without an executable has no install detection.
+		return false
+	}
+	_, err := procman.ResolveExecutable(c.Exec, s.Config.Custom.PathDirs)
+	return err != nil
+}
+
+func readTail(path string, limit int) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return ""
+	}
+	off := info.Size() - int64(limit)
+	if off < 0 {
+		off = 0
+	}
+	if _, err := f.Seek(off, io.SeekStart); err != nil {
+		return ""
+	}
+	b, err := io.ReadAll(io.LimitReader(f, int64(limit)))
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}

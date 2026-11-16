@@ -317,6 +317,17 @@ function updateCardEl(r, card) {
   r.mem.textContent = card.running ? fmtMem(card.memoryKB) : "";
   r.uptime.textContent = card.running ? fmtUptime(card.uptime) : "";
 
+  if (card.installing) {
+    r.statusSpin.hidden = false;
+    r.statusText.textContent = t("status.installing");
+    r.startBtn.className = "btn start";
+    r.startBtn.textContent = t("card.start");
+    r.startBtn.disabled = true;
+    r.openBtn.style.display = "none";
+    r.openBtn.href = "#";
+    return;
+  }
+
   if (card.running && !card.healthy) {
     r.statusSpin.hidden = false;
     r.startBtn.className = "btn stop";
@@ -325,7 +336,7 @@ function updateCardEl(r, card) {
     r.openBtn.className = "btn open-btn";
     r.openBtn.href = card.url || "#";
     r.openBtn.textContent = t("card.open");
-    r.openBtn.style.display = "";
+    r.openBtn.style.display = card.url ? "" : "none";
     r.openBtn.disabled = true;
     r.openBtn.title = t("status.starting");
     return;
@@ -339,8 +350,8 @@ function updateCardEl(r, card) {
     r.openBtn.className = "btn open-btn";
     r.openBtn.href = card.url || "#";
     r.openBtn.textContent = t("card.open");
-    r.openBtn.style.display = "";
-    r.openBtn.disabled = !card.healthy;
+    r.openBtn.style.display = card.url ? "" : "none";
+    r.openBtn.disabled = !card.healthy || !card.url;
     r.openBtn.title = "";
   } else {
     r.startBtn.className = "btn start";
@@ -674,6 +685,15 @@ function detailRows(card) {
     const dirLabel = card.kind === "emulatorjs" ? t("card.gameLabel") : t("card.dirLabel");
     rows.push(`<div class="detail-row"><span class="detail-label">${dirLabel}</span><span class="detail-value"><code>${esc(card.dir)}</code></span></div>`);
   }
+  if (card.kind === "custom" && card.custom) {
+    const c = card.custom;
+    if (c.exec) rows.push(`<div class="detail-row"><span class="detail-label">${t("card.execLabel")}</span><span class="detail-value"><code>${esc(c.exec)}</code></span></div>`);
+    if (c.command) rows.push(`<div class="detail-row"><span class="detail-label">${t("card.commandLabel")}</span><span class="detail-value"><code>${esc(c.command)}</code></span></div>`);
+    if (c.workDir) rows.push(`<div class="detail-row"><span class="detail-label">${t("card.workDirLabel")}</span><span class="detail-value"><code>${esc(c.workDir)}</code></span></div>`);
+    if (c.portMode === "fixed" && c.port) rows.push(`<div class="detail-row"><span class="detail-label">${t("card.portConfigLabel")}</span><span class="detail-value"><code>${esc(c.port)}</code></span></div>`);
+    rows.push(`<div class="detail-row"><span class="detail-label">${t("card.proxyLabel")}</span><span class="detail-value">${esc(customProxyLabel(c.proxyMode))}</span></div>`);
+    if (c.installEnabled) rows.push(`<div class="detail-row"><span class="detail-label">${t("card.installLabel")}</span><span class="detail-value"><code>${esc(c.installCommand || "")}</code></span></div>`);
+  }
   if (card.port) {
     rows.push(`<div class="detail-row"><span class="detail-label">${t("card.portLabel")}</span><span class="detail-value"><code>${esc(card.port)}</code></span></div>`);
   }
@@ -692,8 +712,17 @@ function openCardModal(card) {
     <h2><span class="detail-title"><img class="detail-icon" src="/assets/icons/${card.icon}.svg" alt="">${esc(card.name)}</span> <button type="button" class="modal-close" title="${t("modal.close")}"><img src="/assets/icons/x.svg" alt="${t("modal.close")}"></button></h2>
     <div class="detail-list">${detailRows(card)}</div>
     ${creds ? `<div class="detail-creds"><div class="field-label">${t("card.credsLabel")}</div>${creds}</div>` : ""}
+    ${card.kind === "custom" && card.custom && card.custom.installEnabled ? `
+    <div id="install-panel"${card.installing ? "" : " hidden"}>
+      <div class="field-label">${t("card.installLog")}</div>
+      <pre class="install-log" id="install-output"></pre>
+      <button type="button" class="btn ghost" id="btn-detail-cancel-install"${card.installing ? "" : " hidden"}>${t("card.cancelInstall")}</button>
+    </div>` : ""}
+    ${card.lastError ? `<div class="muted" style="font-size:12px;color:#ff8f8f;margin-top:8px">${esc(card.lastError)}</div>` : ""}
+    ${card.installError && !card.installing ? `<div class="muted" style="font-size:12px;color:#ff8f8f;margin-top:8px">${t("card.installFailed")}: ${esc(card.installError)}</div>` : ""}
     <div class="modal-actions">
       ${card.running ? `<span class="muted" style="margin-right:auto;font-size:12px;align-self:center">${t("card.stopToDelete")}</span>` : ""}
+      ${card.kind === "custom" && card.custom && card.custom.installEnabled ? `<button type="button" class="btn ghost" id="btn-detail-install"${card.running || card.installing ? " disabled" : ""}>${card.installing ? t("card.installing") : t("card.install")}</button>` : ""}
       <button type="button" class="btn ghost" id="btn-detail-delete">${t("card.delete")}</button>
       <button type="button" class="btn primary" id="btn-detail-edit">${t("card.edit")}</button>
     </div>`);
@@ -702,15 +731,83 @@ function openCardModal(card) {
     row.addEventListener("click", () => copyText(row.dataset.copy, row));
   });
   $("#btn-detail-edit", modal).addEventListener("click", () => openEditModal(card));
+  const installBtn = $("#btn-detail-install", modal);
+  const cancelInstallBtn = $("#btn-detail-cancel-install", modal);
+  if (cancelInstallBtn) {
+    cancelInstallBtn.addEventListener("click", async () => {
+      cancelInstallBtn.disabled = true;
+      try {
+        await api(`/api/cards/${card.id}/install/cancel`, { method: "POST", body: "{}" });
+      } catch (e) {
+        alertErr(e);
+      }
+      cancelInstallBtn.disabled = false;
+    });
+  }
+  if (installBtn) {
+    installBtn.addEventListener("click", () => startInstall(card, modal));
+    if (card.installing) pollInstall(card.id, modal);
+  }
   const delBtn = $("#btn-detail-delete", modal);
-  if (card.running) {
+  if (card.running || card.installing) {
     delBtn.disabled = true;
-    delBtn.title = t("card.stopToDelete");
+    delBtn.title = card.installing ? t("card.installing") : t("card.stopToDelete");
   }
   delBtn.addEventListener("click", () => {
     closeModal();
     removeCard(card);
   });
+}
+
+// startInstall launches a custom card's install command and polls its log.
+async function startInstall(card, modal) {
+  const btn = $("#btn-detail-install", modal);
+  const panel = $("#install-panel", modal);
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = t("card.installing");
+  }
+  if (panel) panel.hidden = false;
+  try {
+    await api(`/api/cards/${card.id}/install`, { method: "POST", body: "{}" });
+    pollInstall(card.id, modal);
+  } catch (e) {
+    alertErr(e);
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = t("card.install");
+    }
+  }
+}
+
+async function pollInstall(id, modal) {
+  const panel = $("#install-panel", modal);
+  const output = $("#install-output", modal);
+  const cancelBtn = $("#btn-detail-cancel-install", modal);
+  if (!panel || !output) return;
+  panel.hidden = false;
+  if (cancelBtn) cancelBtn.hidden = false;
+  while (modalRoot.contains(modal)) {
+    try {
+      const st = await api(`/api/cards/${id}/install`);
+      output.textContent = st.output || t("card.installOutputEmpty");
+      if (!st.running) {
+        if (st.error) output.textContent += `\n${t("card.installFailed")}: ${st.error}`;
+        else output.textContent += `\n${t("card.installDone")}`;
+        if (cancelBtn) cancelBtn.hidden = true;
+        const installBtn = $("#btn-detail-install", modal);
+        if (installBtn) {
+          installBtn.disabled = false;
+          installBtn.textContent = t("card.install");
+        }
+        break;
+      }
+    } catch (e) {
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  await loadCards();
 }
 
 function iconPickerGrid(selected) {
@@ -796,21 +893,164 @@ function kindIcon(kind) {
     case "vscodium": return "code";
     case "wetty": return "terminal";
     case "emulatorjs": return "gamepad-2";
+    case "custom": return "rocket";
     default: return "palette";
   }
 }
 
 // ALL_KINDS is the canonical order of the app types.
-const ALL_KINDS = ["comfyui", "opencode", "mdbook", "gitvelo", "vscode", "vscodium", "wetty", "emulatorjs"];
+const ALL_KINDS = ["comfyui", "opencode", "mdbook", "gitvelo", "vscode", "vscodium", "wetty", "emulatorjs", "custom"];
 
-// PROXY_KINDS are the kinds whose "Open" URL can be either the same-origin
-// narthex reverse proxy or the app's own direct URL; their card settings
-// show a reverse-proxy toggle.
+// PROXY_KINDS are the built-in kinds whose "Open" URL can be either the
+// same-origin narthex reverse proxy or the app's own direct URL; their card
+// settings show a reverse-proxy toggle. Custom cards use a 3-state select.
 const PROXY_KINDS = ["mdbook", "emulatorjs", "opencode", "gitvelo"];
 
-// isProxyKind reports whether a kind supports the reverse-proxy toggle.
+// isProxyKind reports whether a built-in kind supports the reverse-proxy
+// toggle.
 function isProxyKind(kind) {
   return PROXY_KINDS.includes(kind);
+}
+
+// customProxyLabel returns the localized label of a custom proxy mode.
+function customProxyLabel(mode) {
+  switch (mode) {
+    case "path": return t("modal.proxyModePath");
+    case "gateway": return t("modal.proxyModeGateway");
+    default: return t("modal.proxyModeOff");
+  }
+}
+
+// customFieldsHTML renders the custom-card configuration fields. prefix
+// keeps the element IDs unique between the add and edit modals.
+function customFieldsHTML(prefix, c) {
+  c = c || {};
+  const execMode = c.execMode || "args";
+  const portMode = c.portMode || "auto";
+  const proxyMode = c.proxyMode || "off";
+  return `
+    <div>
+      <div class="field-label">${t("modal.execModeLabel")}</div>
+      <select id="${prefix}-exec-mode" class="btn ghost lang-select" style="width:100%">
+        <option value="args"${execMode === "args" ? " selected" : ""}>${t("modal.execModeArgs")}</option>
+        <option value="shell"${execMode === "shell" ? " selected" : ""}>${t("modal.execModeShell")}</option>
+      </select>
+    </div>
+    <div>
+      <div class="field-label">${t("modal.execLabel")}</div>
+      <input type="text" id="${prefix}-exec" value="${esc(c.exec || "")}" placeholder="/usr/local/bin/myapp">
+      <div class="muted" style="font-size:12px;margin-top:4px">${t("modal.execHint")}</div>
+    </div>
+    <div>
+      <div class="field-label">${t("modal.commandLabel")}</div>
+      <textarea id="${prefix}-command" rows="3" placeholder="--port {port} --host {host}">${esc(c.command || "")}</textarea>
+      <div class="muted" id="${prefix}-command-hint" style="font-size:12px;margin-top:4px"></div>
+    </div>
+    <div>
+      <div class="field-label">${t("modal.workDirLabel")}</div>
+      <input type="text" id="${prefix}-workdir" value="${esc(c.workDir || "")}" placeholder="~/my-project">
+      <div class="muted" style="font-size:12px;margin-top:4px">${t("modal.workDirHint")}</div>
+    </div>
+    <div>
+      <div class="field-label">${t("modal.portModeLabel")}</div>
+      <select id="${prefix}-port-mode" class="btn ghost lang-select" style="width:100%">
+        <option value="auto"${portMode === "auto" ? " selected" : ""}>${t("modal.portModeAuto")}</option>
+        <option value="fixed"${portMode === "fixed" ? " selected" : ""}>${t("modal.portModeFixed")}</option>
+        <option value="none"${portMode === "none" ? " selected" : ""}>${t("modal.portModeNone")}</option>
+      </select>
+    </div>
+    <div id="${prefix}-port-row"${portMode === "fixed" ? "" : " hidden"}>
+      <div class="field-label">${t("modal.portLabel")}</div>
+      <input type="number" id="${prefix}-port" min="1" max="65535" value="${c.port || ""}" placeholder="5600">
+    </div>
+    <div class="muted" id="${prefix}-port-hint" style="font-size:12px">${t("modal.portHint")}</div>
+    <div>
+      <div class="field-label">${t("modal.proxyModeLabel")}</div>
+      <select id="${prefix}-proxy-mode" class="btn ghost lang-select" style="width:100%">
+        <option value="off"${proxyMode === "off" ? " selected" : ""}>${t("modal.proxyModeOff")}</option>
+        <option value="path"${proxyMode === "path" ? " selected" : ""}>${t("modal.proxyModePath")}</option>
+        <option value="gateway"${proxyMode === "gateway" ? " selected" : ""}>${t("modal.proxyModeGateway")}</option>
+      </select>
+      <div class="muted" style="font-size:12px;margin-top:4px">${t("modal.proxyModeHint")}</div>
+      <div class="muted" id="${prefix}-proxy-warning" style="font-size:12px;margin-top:4px;color:#ffb86b"${proxyMode === "path" ? "" : " hidden"}>${t("modal.proxyPathWarning")}</div>
+    </div>
+    <div id="${prefix}-gateway-row"${proxyMode === "gateway" ? "" : " hidden"}>
+      <div class="field-label">${t("modal.customGatewayPortLabel")}</div>
+      <input type="number" id="${prefix}-gateway-port" min="1" max="65535" value="${c.gatewayPort || ""}" placeholder="26200">
+      <div class="muted" style="font-size:12px;margin-top:4px">${t("modal.customGatewayPortHint")}</div>
+    </div>
+    <div>
+      <label class="slogan-toggle">
+        <input type="checkbox" id="${prefix}-install-enabled"${c.installEnabled ? " checked" : ""}> ${t("modal.installEnable")}
+      </label>
+    </div>
+    <div id="${prefix}-install-fields"${c.installEnabled ? "" : " hidden"}>
+      <label class="slogan-toggle" style="margin-bottom:6px">
+        <input type="checkbox" id="${prefix}-install-auto"${c.installAuto ? " checked" : ""}> ${t("modal.installAuto")}
+      </label>
+      <div class="field-label">${t("modal.installCommandLabel")}</div>
+      <input type="text" id="${prefix}-install-command" value="${esc(c.installCommand || "brew install ")}" placeholder="brew install myapp">
+      <div class="muted" style="font-size:12px;margin-top:4px">${t("modal.installCommandHint")}</div>
+    </div>`;
+}
+
+// bindCustomFields wires the mode switches and returns a reader for the
+// current values.
+function bindCustomFields(modal, prefix) {
+  const mode = $(`#${prefix}-exec-mode`, modal);
+  const commandHint = $(`#${prefix}-command-hint`, modal);
+  const portMode = $(`#${prefix}-port-mode`, modal);
+  const portRow = $(`#${prefix}-port-row`, modal);
+  const portInput = $(`#${prefix}-port`, modal);
+  const proxyMode = $(`#${prefix}-proxy-mode`, modal);
+  const gatewayRow = $(`#${prefix}-gateway-row`, modal);
+  const proxyWarning = $(`#${prefix}-proxy-warning`, modal);
+  const installEnabled = $(`#${prefix}-install-enabled`, modal);
+  const installFields = $(`#${prefix}-install-fields`, modal);
+  const installAuto = $(`#${prefix}-install-auto`, modal);
+  const installCommand = $(`#${prefix}-install-command`, modal);
+
+  const sync = () => {
+    commandHint.textContent = t(mode.value === "shell" ? "modal.commandShellHint" : "modal.commandArgsHint");
+    portRow.hidden = portMode.value !== "fixed";
+    portInput.disabled = portMode.value !== "fixed";
+    gatewayRow.hidden = proxyMode.value !== "gateway";
+    proxyWarning.hidden = proxyMode.value !== "path";
+    installFields.hidden = !installEnabled.checked;
+    installAuto.disabled = !installEnabled.checked;
+    if (proxyMode.value !== "off" && portMode.value === "none") {
+      portMode.value = "auto";
+      portRow.hidden = true;
+      portInput.disabled = true;
+    }
+  };
+  mode.addEventListener("change", sync);
+  portMode.addEventListener("change", sync);
+  proxyMode.addEventListener("change", sync);
+  installEnabled.addEventListener("change", () => {
+    if (installEnabled.checked && !installCommand.value.trim()) {
+      installCommand.value = "brew install ";
+    }
+    sync();
+  });
+  sync();
+
+  return () => {
+    const pm = portMode.value;
+    return {
+      execMode: mode.value,
+      exec: $(`#${prefix}-exec`, modal).value.trim(),
+      command: $(`#${prefix}-command`, modal).value.trim(),
+      workDir: $(`#${prefix}-workdir`, modal).value.trim(),
+      portMode: pm,
+      port: pm === "fixed" ? parseInt(portInput.value, 10) || 0 : 0,
+      proxyMode: proxyMode.value,
+      gatewayPort: proxyMode.value === "gateway" ? (parseInt($(`#${prefix}-gateway-port`, modal).value, 10) || 0) : 0,
+      installEnabled: installEnabled.checked,
+      installAuto: installEnabled.checked && installAuto.checked,
+      installCommand: installCommand.value,
+    };
+  };
 }
 
 // kindEntries returns every known kind with whether it can be added and,
@@ -820,6 +1060,10 @@ function isProxyKind(kind) {
 function kindEntries() {
   return ALL_KINDS.map((k) => {
     const app = (meta.apps && meta.apps[k]) || {};
+    if (k === "custom") {
+      // Custom cards may be added any number of times and need no detection.
+      return { kind: k, app, available: true, reason: "" };
+    }
     if (lastCards.some((c) => c.kind === k)) {
       return { kind: k, app, available: false, reason: "add.reason.alreadyAdded" };
     }
@@ -861,6 +1105,14 @@ async function openAddModal() {
         <button type="button" class="btn primary" id="btn-project-next" disabled>${t("modal.next")}</button>
       </div>
     </div>
+    <div id="step-custom" hidden>
+      <div class="field-label">${t("modal.customStep")}</div>
+      <div id="custom-fields"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn ghost" id="btn-custom-back">${t("modal.backToKinds")}</button>
+        <button type="button" class="btn primary" id="btn-custom-next">${t("modal.next")}</button>
+      </div>
+    </div>
     <div id="step-pickers" hidden>
       <div>
         <div class="field-label">${t("modal.nameLabel")}</div>
@@ -882,10 +1134,11 @@ async function openAddModal() {
 
   const stepKind = $("#step-kind", modal);
   const stepProject = $("#step-project", modal);
+  const stepCustom = $("#step-custom", modal);
   const stepPickers = $("#step-pickers", modal);
   const kindList = $("#kind-list", modal);
   const nextBtn = $("#btn-kind-next", modal);
-  let iconPicker, bgPicker;
+  let iconPicker, bgPicker, customReader = null;
 
   for (const entry of entries) {
     const kind = entry.kind;
@@ -917,6 +1170,7 @@ async function openAddModal() {
   function showPickers(name) {
     stepKind.hidden = true;
     stepProject.hidden = true;
+    stepCustom.hidden = true;
     stepPickers.hidden = false;
     $("#card-name", modal).value = name;
     if (!iconPicker) {
@@ -936,9 +1190,38 @@ async function openAddModal() {
       stepProject.hidden = false;
       setupProjectStep();
       loadProjectStep();
+    } else if (chosenKind === "custom") {
+      stepKind.hidden = true;
+      stepCustom.hidden = false;
+      if (!customReader) {
+        $("#custom-fields", modal).innerHTML = customFieldsHTML("add", {});
+        customReader = bindCustomFields(modal, "add");
+      }
     } else {
       showPickers((meta.apps[chosenKind] || {}).label || chosenKind);
     }
+  });
+
+  $("#btn-custom-back", modal).addEventListener("click", () => {
+    stepCustom.hidden = true;
+    stepKind.hidden = false;
+  });
+
+  $("#btn-custom-next", modal).addEventListener("click", () => {
+    if (!customReader) return;
+    const c = customReader();
+    if (c.execMode === "args" && !c.exec) {
+      alert(t("err.customExecRequired"));
+      return;
+    }
+    if (c.execMode === "shell" && !c.command) {
+      alert(t("err.customCommandRequired"));
+      return;
+    }
+    if (c.proxyMode === "path" && !confirm(t("modal.proxyPathWarning"))) {
+      return;
+    }
+    showPickers("Custom");
   });
 
   /* ---- mdbook project / emulatorjs game step ---- */
@@ -1048,7 +1331,11 @@ async function openAddModal() {
 
   $("#btn-pick-again", modal).addEventListener("click", () => {
     stepPickers.hidden = true;
-    stepKind.hidden = false;
+    if (chosenKind === "custom") {
+      stepCustom.hidden = false;
+    } else {
+      stepKind.hidden = false;
+    }
   });
 
   $("#btn-create", modal).addEventListener("click", async () => {
@@ -1061,6 +1348,7 @@ async function openAddModal() {
       background: bgPicker.get(),
     };
     if (chosenKind === "mdbook" || chosenKind === "emulatorjs") body.dir = chosenDir;
+    if (chosenKind === "custom" && customReader) body.custom = customReader();
     try {
       await api("/api/cards", {
         method: "POST",
@@ -1092,6 +1380,7 @@ async function openEditModal(card) {
       <div class="field-label">${t("modal.bgLabel")}</div>
       <div id="edit-bg-grid"></div>
     </div>
+    ${card.kind === "custom" ? `<div id="edit-custom-fields">${customFieldsHTML("edit", card.custom)}</div>` : ""}
     ${card.kind === "opencode" || card.kind === "gitvelo" ? `
     <div>
       <div class="field-label">${card.kind === "gitvelo" ? t("modal.gitveloGatewayPortLabel") : t("modal.gatewayPortLabel")}</div>
@@ -1114,6 +1403,7 @@ async function openEditModal(card) {
   const iconPicker = iconPickerGrid(card.icon);
   $("#edit-icon-grid", modal).appendChild(iconPicker.el);
   const bgPicker = bgPickerGrid($("#edit-bg-grid", modal), card.background);
+  const customReader = card.kind === "custom" ? bindCustomFields(modal, "edit") : null;
   const isGitvelo = card.kind === "gitvelo";
   const gwPortInput = card.kind === "opencode" || isGitvelo ? $("#edit-gateway-port", modal) : null;
   if (gwPortInput) {
@@ -1142,6 +1432,9 @@ async function openEditModal(card) {
       alert(t("err.invalidGatewayPort"));
       return;
     }
+    if (customReader && customReader().proxyMode === "path" && !confirm(t("modal.proxyPathWarning"))) {
+      return;
+    }
     btn.disabled = true;
     try {
       const gwMeta = isGitvelo ? meta.gitveloGatewayPort : meta.gatewayPort;
@@ -1161,6 +1454,7 @@ async function openEditModal(card) {
           icon: iconPicker.get(),
           background: bgPicker.get(),
           ...(proxyInput ? { proxy: proxyInput.checked } : {}),
+          ...(customReader ? { custom: customReader() } : {}),
         }),
       });
       closeModal();

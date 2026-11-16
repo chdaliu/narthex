@@ -60,6 +60,40 @@ const (
 	// binary (the hidden `emulator-serve` subcommand) to serve the player
 	// page and the selected ROM (see procman.startEmulatorJS).
 	KindEmulatorJS = "emulatorjs"
+	// KindCustom launches a user-defined command. Unlike the built-in kinds,
+	// any number of custom cards may exist (they are identified by ID).
+	KindCustom = "custom"
+)
+
+// Custom card command modes (CustomCard.ExecMode).
+const (
+	// CustomExecArgs runs the resolved program with CustomCard.Command as
+	// shell-parsed arguments.
+	CustomExecArgs = "args"
+	// CustomExecShell runs CustomCard.Command itself through /bin/sh -c;
+	// CustomCard.Exec is optional and only used for installation detection.
+	CustomExecShell = "shell"
+)
+
+// Custom card port modes (CustomCard.PortMode).
+const (
+	// CustomPortAuto picks a free port from custom.portRange at start time
+	// (reusing the card's last auto port when it is still free).
+	CustomPortAuto = "auto"
+	// CustomPortFixed uses CustomCard.Port.
+	CustomPortFixed = "fixed"
+	// CustomPortNone starts a non-web process: no health check and no URL.
+	CustomPortNone = "none"
+)
+
+// Custom card proxy modes (CustomCard.ProxyMode).
+const (
+	// CustomProxyOff opens the app's own direct URL.
+	CustomProxyOff = "off"
+	// CustomProxyPath proxies the app same-origin under /custom/<id>/.
+	CustomProxyPath = "path"
+	// CustomProxyGateway proxies the app on a dedicated per-card listener.
+	CustomProxyGateway = "gateway"
 )
 
 // ComfyUIConfig controls how ComfyUI servers are spawned.
@@ -224,6 +258,24 @@ type EmulatorJSConfig struct {
 	CDNVersion string `json:"cdnVersion,omitempty"`
 }
 
+// CustomConfig controls user-defined custom cards.
+type CustomConfig struct {
+	// Hostname is the listen address proposed to custom apps via the
+	// {host} placeholder when the card opens directly. 0.0.0.0 makes the
+	// app reachable from other devices on the LAN.
+	Hostname string `json:"hostname"`
+	// PortRange is the range a free port is picked from when a custom card
+	// uses CustomPortAuto.
+	PortRange [2]int `json:"portRange"`
+	// GatewayPortRange is the range a free gateway port is picked from when
+	// a custom card uses CustomProxyGateway without an explicit port.
+	GatewayPortRange [2]int `json:"gatewayPortRange"`
+	// PathDirs are extra directories appended to the child PATH (and used
+	// by bare program-name lookups). They make tools installed outside the
+	// default PATH (~/.local/bin, ~/go/bin, ...) usable under launchd.
+	PathDirs []string `json:"pathDirs,omitempty"`
+}
+
 // Config is the persisted narthex configuration.
 type Config struct {
 	Hostname      string        `json:"hostname"`
@@ -245,6 +297,8 @@ type Config struct {
 	Wetty WettyConfig `json:"wetty"`
 	// EmulatorJS controls the EmulatorJS retro-emulator card.
 	EmulatorJS EmulatorJSConfig `json:"emulatorjs"`
+	// Custom controls user-defined custom cards.
+	Custom CustomConfig `json:"custom"`
 	// Language selects the UI and CLI language: en (default), zh-CN, zh-TW.
 	Language string `json:"language"`
 	// SessionTTLHours is the session validity in hours (default 720 = 30 days).
@@ -311,6 +365,12 @@ func DefaultConfig() *Config {
 			PortRange:  [2]int{5100, 5299},
 			Dirs:       []string{},
 			CDNVersion: "stable",
+		},
+		Custom: CustomConfig{
+			Hostname:         "0.0.0.0",
+			PortRange:        [2]int{5600, 5799},
+			GatewayPortRange: [2]int{26200, 26299},
+			PathDirs:         []string{},
 		},
 	}
 }
@@ -450,6 +510,21 @@ func LoadConfig(path string) (*Config, error) {
 	if c.EmulatorJS.CDNVersion == "" {
 		c.EmulatorJS.CDNVersion = def.EmulatorJS.CDNVersion
 	}
+	if c.Custom.Hostname == "" {
+		c.Custom.Hostname = def.Custom.Hostname
+	}
+	if c.Custom.PortRange == [2]int{0, 0} {
+		c.Custom.PortRange = def.Custom.PortRange
+	}
+	if c.Custom.GatewayPortRange == [2]int{0, 0} {
+		c.Custom.GatewayPortRange = def.Custom.GatewayPortRange
+	}
+	if c.Custom.PortRange[0] <= 0 || c.Custom.PortRange[1] < c.Custom.PortRange[0] {
+		return nil, fmt.Errorf("custom.portRange is invalid: %v", c.Custom.PortRange)
+	}
+	if c.Custom.GatewayPortRange[0] <= 0 || c.Custom.GatewayPortRange[1] < c.Custom.GatewayPortRange[0] {
+		return nil, fmt.Errorf("custom.gatewayPortRange is invalid: %v", c.Custom.GatewayPortRange)
+	}
 	if c.Language == "" {
 		c.Language = def.Language
 	}
@@ -467,8 +542,43 @@ func SaveConfig(path string, c *Config) error {
 	return atomicWrite(path, c, 0o600)
 }
 
-// Card is a managed desktop-app entry. Each kind (comfyui) has at most
-// one card; Kind is the unique identity.
+// CustomCard is the configuration of a user-defined card. It is only set
+// when Card.Kind is KindCustom.
+type CustomCard struct {
+	// ExecMode is CustomExecArgs (default) or CustomExecShell.
+	ExecMode string `json:"execMode,omitempty"`
+	// Exec is the program path: an absolute path, a ~/ path, or a bare
+	// command name resolved from PATH (and custom.pathDirs).
+	Exec string `json:"exec,omitempty"`
+	// Command is the argument line in args mode, or the full shell command
+	// in shell mode. {port} and {host} are replaced at start time.
+	Command string `json:"command,omitempty"`
+	// WorkDir is the process working directory. Empty uses the user's home.
+	WorkDir string `json:"workDir,omitempty"`
+	// PortMode is CustomPortAuto (default), CustomPortFixed or CustomPortNone.
+	PortMode string `json:"portMode,omitempty"`
+	// Port is the fixed port in CustomPortFixed mode.
+	Port int `json:"port,omitempty"`
+	// ProxyMode is CustomProxyOff (default), CustomProxyPath or
+	// CustomProxyGateway.
+	ProxyMode string `json:"proxyMode,omitempty"`
+	// GatewayPort is the preferred dedicated gateway port for
+	// CustomProxyGateway; 0 lets narthex allocate one from
+	// custom.gatewayPortRange.
+	GatewayPort int `json:"gatewayPort,omitempty"`
+	// InstallEnabled exposes the install action and the install command.
+	InstallEnabled bool `json:"installEnabled,omitempty"`
+	// InstallAuto runs the install command automatically when a start finds
+	// the configured program missing.
+	InstallAuto bool `json:"installAuto,omitempty"`
+	// InstallCommand is the non-interactive install command (default
+	// "brew install " at creation time).
+	InstallCommand string `json:"installCommand,omitempty"`
+}
+
+// Card is a managed app entry. Built-in kinds have at most one card each
+// (Kind is their identity); custom cards are identified by ID and may be
+// repeated.
 type Card struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
@@ -477,15 +587,21 @@ type Card struct {
 	PID        int    `json:"pid"`
 	Port       int    `json:"port"`
 	StartedAt  int64  `json:"startedAt"`
-	// Kind selects the managed app: "comfyui".
+	// Kind selects the managed app: "comfyui" ... "emulatorjs" or "custom".
 	Kind string `json:"kind"`
 	// Dir is the project directory the card operates on. Set for kinds that
 	// pick a project (mdbook) and for emulatorjs (the selected ROM file).
 	Dir string `json:"dir,omitempty"`
 	// DisableProxy turns off the same-origin reverse proxy for the
-	// proxy-capable kinds (mdbook/emulatorjs/opencode): the card then opens
-	// the app's own direct URL instead. Missing/false keeps the proxy on.
+	// proxy-capable built-in kinds (mdbook/emulatorjs/opencode/gitvelo):
+	// the card then opens the app's own direct URL instead. Missing/false
+	// keeps the proxy on. Custom cards use Custom.ProxyMode instead.
 	DisableProxy bool `json:"disableProxy,omitempty"`
+	// LastPort is the last auto-assigned port of a custom card, so a
+	// CustomPortAuto card keeps a stable URL while that port stays free.
+	LastPort int `json:"lastPort,omitempty"`
+	// Custom is set for KindCustom cards.
+	Custom *CustomCard `json:"custom,omitempty"`
 }
 
 // State is the persisted card list.
@@ -509,18 +625,33 @@ func LoadState(path string) (*State, error) {
 	if s.Cards == nil {
 		s.Cards = []Card{}
 	}
-	// Cards are identified by kind: unknown or duplicated kinds are
-	// dropped, keeping the first occurrence.
-	seen := map[string]bool{}
+	// Built-in cards are identified by kind: unknown or duplicated kinds
+	// are dropped, keeping the first occurrence. Custom cards are identified
+	// by ID and may be repeated.
+	seenKind := map[string]bool{}
+	seenID := map[string]bool{}
 	kept := s.Cards[:0]
 	for _, c := range s.Cards {
+		if c.ID == "" || seenID[c.ID] {
+			continue
+		}
+		if c.Kind == KindCustom {
+			if c.Custom == nil {
+				c.Custom = &CustomCard{}
+			}
+			normalizeCustomCard(c.Custom)
+			seenID[c.ID] = true
+			kept = append(kept, c)
+			continue
+		}
 		if c.Kind != KindComfyUI && c.Kind != KindOpencode && c.Kind != KindMdbook && c.Kind != KindGitvelo && c.Kind != KindVSCode && c.Kind != KindVSCodium && c.Kind != KindWetty && c.Kind != KindEmulatorJS {
 			continue
 		}
-		if seen[c.Kind] {
+		if seenKind[c.Kind] {
 			continue
 		}
-		seen[c.Kind] = true
+		seenKind[c.Kind] = true
+		seenID[c.ID] = true
 		kept = append(kept, c)
 	}
 	s.Cards = kept
@@ -528,6 +659,25 @@ func LoadState(path string) (*State, error) {
 		s.Cards = []Card{}
 	}
 	return &s, nil
+}
+
+// NormalizeCustomCard fills the default modes of a custom card. It is
+// exported so the API can normalize request payloads the same way the state
+// loader does.
+func NormalizeCustomCard(c *CustomCard) {
+	normalizeCustomCard(c)
+}
+
+func normalizeCustomCard(c *CustomCard) {
+	if c.ExecMode != CustomExecShell {
+		c.ExecMode = CustomExecArgs
+	}
+	if c.PortMode != CustomPortFixed && c.PortMode != CustomPortNone {
+		c.PortMode = CustomPortAuto
+	}
+	if c.ProxyMode != CustomProxyPath && c.ProxyMode != CustomProxyGateway {
+		c.ProxyMode = CustomProxyOff
+	}
 }
 
 // SaveState writes the state file atomically.

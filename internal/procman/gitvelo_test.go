@@ -87,7 +87,7 @@ func TestGitveloLifecycle(t *testing.T) {
 		GitveloPortRange: [2]int{5480, 5499},
 		LogDir:           logDir,
 	}
-	pid, port, err := m.Start("gitvelo", t.TempDir(), "gv1", nil, true)
+	pid, port, err := startForTest(m, "gitvelo", t.TempDir(), "gv1", nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestGitveloLifecycle(t *testing.T) {
 		GitveloPortRange: [2]int{5480, 5499},
 		LogDir:           t.TempDir(),
 	}
-	pid, port, err = m.Start("gitvelo", t.TempDir(), "gv2", nil, false)
+	pid, port, err = startForTest(m, "gitvelo", t.TempDir(), "gv2", nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestGitveloErrors(t *testing.T) {
 		GitveloPortRange: [2]int{5480, 5499},
 		LogDir:           t.TempDir(),
 	}
-	if _, _, err := m.Start("gitvelo", t.TempDir(), "x", nil, true); err == nil {
+	if _, _, err := startForTest(m, "gitvelo", t.TempDir(), "x", nil, true); err == nil {
 		t.Fatal("start without a gitvelo binary should error")
 	}
 }

@@ -129,7 +129,7 @@ func TestOpencodeLifecycle(t *testing.T) {
 		LogDir:            logDir,
 	}
 
-	pid, port, err := m.Start("opencode", t.TempDir(), "oc1", nil, false)
+	pid, port, err := startForTest(m, "opencode", t.TempDir(), "oc1", nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestOpencodeErrors(t *testing.T) {
 		OpencodePassword:  "secret",
 		LogDir:            t.TempDir(),
 	}
-	if _, _, err := m.Start("opencode", t.TempDir(), "x", nil, false); err == nil {
+	if _, _, err := startForTest(m, "opencode", t.TempDir(), "x", nil, false); err == nil {
 		t.Fatal("start without an opencode binary should error")
 	}
 }

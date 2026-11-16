@@ -162,7 +162,7 @@ func TestMdbookLifecycle(t *testing.T) {
 		MdbookPortRange: [2]int{4580, 4599},
 		LogDir:          t.TempDir(),
 	}
-	pid, port, err := m.Start("mdbook", bookDir, "mb1", nil, false)
+	pid, port, err := startForTest(m, "mdbook", bookDir, "mb1", nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestMdbookStartError(t *testing.T) {
 		MdbookPortRange: [2]int{4580, 4599},
 		LogDir:          t.TempDir(),
 	}
-	if _, _, err := m.Start("mdbook", t.TempDir(), "x", nil, false); err == nil {
+	if _, _, err := startForTest(m, "mdbook", t.TempDir(), "x", nil, false); err == nil {
 		t.Fatal("start without an mdbook binary should error")
 	}
 }

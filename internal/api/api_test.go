@@ -58,12 +58,12 @@ type fakeBackend struct {
 	lastNoAuth bool
 }
 
-func (f *fakeBackend) Start(kind, dir, id string, hosts []string, noAuth bool) (int, int, error) {
+func (f *fakeBackend) Start(spec procman.StartSpec) (int, int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.started = append(f.started, kind+"|"+dir+"|"+id)
-	f.lastHosts = hosts
-	f.lastNoAuth = noAuth
+	f.started = append(f.started, spec.Card.Kind+"|"+spec.Dir+"|"+spec.Card.ID)
+	f.lastHosts = spec.Hosts
+	f.lastNoAuth = spec.NoAuth
 	f.alive = true
 	f.healthy = true
 	f.mem = 42000
@@ -2078,6 +2078,7 @@ func TestMdbookProxyToggle(t *testing.T) {
 	bookDir := filepath.Join(booksDir, "guide")
 	env := newTestEnvFull(t, nil, func(s *api.Service) {
 		mdbookInstalled(s, booksDir, bookDir)
+		wettyInstalled(s)
 	})
 	cookie := loginCookie(t, env.base, testPassword)
 	res, m := doReq(t, "POST", env.base+"/api/cards", cookie, map[string]any{"kind": "mdbook", "dir": bookDir})

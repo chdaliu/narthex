@@ -119,6 +119,15 @@ type Manager struct {
 	// EmulatorCDNVersion is the CDN build used when EmulatorDataDir is
 	// empty (stable/latest/nightly).
 	EmulatorCDNVersion string
+	// CustomHostname is the listen address proposed to custom apps via the
+	// {host} placeholder when the card opens directly.
+	CustomHostname string
+	// CustomPortRange is the range a free port is picked from for custom
+	// cards in auto port mode.
+	CustomPortRange [2]int
+	// CustomPathDirs are extra directories used for bare program-name
+	// lookups and prepended to the child PATH.
+	CustomPathDirs []string
 }
 
 // New creates a Manager with sane defaults.
@@ -126,64 +135,64 @@ func New(hostname string, portRange [2]int, logDir string) *Manager {
 	return &Manager{Hostname: hostname, PortRange: portRange, LogDir: logDir}
 }
 
-// Start launches the instance for kind. For comfyui a free port from the
-// range is assigned and the ComfyUI server is spawned in dir; for
-// opencode a free port from the opencode range is assigned and the
-// opencode web server is spawned with dir as its working directory. The
-// child runs in its own process group so Stop can terminate the whole
-// tree. Output is appended to <LogDir>/<id>.log.
-func (m *Manager) Start(kind, dir, id string, hosts []string, noAuth bool) (pid int, port int, err error) {
-	switch kind {
+// Start launches the instance described by spec. The child runs in its own
+// process group so Stop can terminate the whole tree. Output is appended to
+// <LogDir>/<card ID>.log.
+func (m *Manager) Start(spec StartSpec) (pid int, port int, err error) {
+	card := spec.Card
+	switch card.Kind {
 	case store.KindComfyUI:
 		port, err = m.FreePort()
 		if err != nil {
 			return 0, 0, err
 		}
-		pid, err = m.startComfyUI(dir, id, port)
+		pid, err = m.startComfyUI(spec.Dir, card.ID, port)
 	case store.KindOpencode:
 		port, err = freePortIn(m.OpencodePortRange)
 		if err != nil {
 			return 0, 0, err
 		}
-		pid, err = m.startOpencode(dir, id, port)
+		pid, err = m.startOpencode(spec.Dir, card.ID, port)
 	case store.KindMdbook:
 		port, err = freePortIn(m.MdbookPortRange)
 		if err != nil {
 			return 0, 0, err
 		}
-		pid, err = m.startMdbook(dir, id, port)
+		pid, err = m.startMdbook(spec.Dir, card.ID, port)
 	case store.KindGitvelo:
 		port, err = freePortIn(m.GitveloPortRange)
 		if err != nil {
 			return 0, 0, err
 		}
-		pid, err = m.startGitvelo(dir, id, port, noAuth)
+		pid, err = m.startGitvelo(spec.Dir, card.ID, port, spec.NoAuth)
 	case store.KindVSCode:
 		port, err = freePortIn(m.VscodePortRange)
 		if err != nil {
 			return 0, 0, err
 		}
-		pid, err = m.startVSCode(dir, id, port)
+		pid, err = m.startVSCode(spec.Dir, card.ID, port)
 	case store.KindVSCodium:
 		port, err = freePortIn(m.VscodiumPortRange)
 		if err != nil {
 			return 0, 0, err
 		}
-		pid, err = m.startVSCodium(dir, id, port)
+		pid, err = m.startVSCodium(spec.Dir, card.ID, port)
 	case store.KindWetty:
 		port, err = freePortIn(m.WettyPortRange)
 		if err != nil {
 			return 0, 0, err
 		}
-		pid, err = m.startWetty(dir, id, port, hosts)
+		pid, err = m.startWetty(spec.Dir, card.ID, port, spec.Hosts)
 	case store.KindEmulatorJS:
 		port, err = freePortIn(m.EmulatorPortRange)
 		if err != nil {
 			return 0, 0, err
 		}
-		pid, err = m.startEmulatorJS(dir, id, port)
+		pid, err = m.startEmulatorJS(spec.Dir, card.ID, port)
+	case store.KindCustom:
+		pid, port, err = m.startCustom(card, spec.Dir)
 	default:
-		return 0, 0, fmt.Errorf("unsupported service kind: %s", kind)
+		return 0, 0, fmt.Errorf("unsupported service kind: %s", card.Kind)
 	}
 	return pid, port, err
 }
@@ -239,8 +248,13 @@ func (m *Manager) Status(kind string, pid, port int) Status {
 	st := Status{Alive: Alive(pid)}
 	if st.Alive {
 		// Health checks always dial the loopback address: spawned
-		// servers bind 0.0.0.0 but are reached via 127.0.0.1.
-		st.Healthy = Healthy("127.0.0.1", port)
+		// servers bind 0.0.0.0 but are reached via 127.0.0.1. A card with
+		// no port (custom PortMode=none) is healthy as long as it lives.
+		if port > 0 {
+			st.Healthy = Healthy("127.0.0.1", port)
+		} else {
+			st.Healthy = true
+		}
 		st.MemoryKB, _ = MemoryKB(pid)
 	}
 	return st

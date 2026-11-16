@@ -5,7 +5,7 @@
 ## 特性
 
 - **超级轻量**:单一静态二进制,前端与素材经 `go:embed` 内嵌,空闲内存 ~10 MB;除 `golang.org/x/crypto` 外零依赖
-- **卡片管理**:图标(38 个 Lucide 图标)与背景(8 张免费图片)可编辑;每类应用一张卡片,以类型(`comfyui` / `opencode` / `mdbook` / `gitvelo` / `vscode` / `vscodium` / `wetty` / `emulatorjs`)为唯一标识(仅 mdBook 卡片含项目目录,EmulatorJS 卡片含 ROM 文件)
+- **卡片管理**:图标(38 个 Lucide 图标)与背景(8 张免费图片)可编辑;每个内置应用类型(`comfyui` / `opencode` / `mdbook` / `gitvelo` / `vscode` / `vscodium` / `wetty` / `emulatorjs`)一张卡片,并支持任意数量的**自定义**卡片(仅 mdBook 卡片含项目目录,EmulatorJS 卡片含 ROM 文件,自定义卡片保存自己的程序与命令)
 - **应用检测**:启动时自动检测已安装的应用;**未安装的不显示**添加入口,无法创建/启动对应卡片
   - `comfyui` 卡片启动 **ComfyUI 服务器**(`python main.py --port <n> --listen 0.0.0.0`),代码目录与解释器从 ComfyUI Desktop 的安装记录解析(`installations.json`,可用 `NARTHEX_COMFY_DESKTOP_DIR` 覆盖);服务器沿用桌面端的存储:透传共享模型路径配置(`--extra-model-paths-config`,因此在桌面端下载的模型无需重新下载即可见)、共享或实例各自的输入/输出目录,以及实例的额外启动参数(如 `--enable-manager`);端口在可配置范围(默认 4100–4299)内自动分配,监听 `0.0.0.0` **支持局域网访问**——「打开」按钮本机为 `http://127.0.0.1:<port>/`,其它设备为 `http://<面板主机>:<port>/`
   - `opencode` 卡片启动 **opencode web 界面**(`opencode serve --port <n> --hostname 0.0.0.0`;opencode v2 移除了 `web` 子命令,v1 CLI 仍以 `opencode web --port <n> --hostname 0.0.0.0` 启动),在浏览器中进行 AI 编程;端口在可配置范围(默认 4300–4499)内自动分配,监听 `0.0.0.0` **支持局域网访问**。因服务绑定非回环地址,首次启动会**自动生成并持久化一个随机密码**(`OPENCODE_SERVER_PASSWORD`,用户名 `opencode`),**用户名、密码与直连 API 地址都显示在卡片详情弹窗中、可点击复制**,serve 首次生成时也会打印。浏览器不直连 opencode:**「打开」URL 指向 narthex 网关**(固定端口 `opencode.gatewayPort`,默认 4399,凭 narthex 会话鉴权;被占用时自动改用空闲端口),由服务端注入 basic-auth 凭据——既无原生弹框,也不会因 opencode 的 `crossorigin` 资源缺陷而白屏。网关监听在整个 serve 生命周期内绑定,因此陈旧的 opencode 标签页总能得到响应(会话失效时重定向登录页,或本地化的「opencode 未运行」页并跳回面板),而不会连接被拒白屏;仅在 opencode 卡片运行时才进行代理。卡片详情弹窗中的 **「API」行**是直连 `http://<主机>:<端口>/` 端点(同一密码),因此 `opencode attach http://<主机>:<端口> --password <密码>`、SDK 等远程客户端可继续使用;启动时**不会在宿主机自动弹出浏览器**——通过「打开」按钮进入
@@ -15,6 +15,7 @@
   - `vscodium` 卡片启动 **VSCodium Web 服务器**(`codium serve-web --host 0.0.0.0 --port <n> --server-data-dir <目录>`),与 VS Code 相互独立,两者可同时建卡运行;该类型在 **`codium` CLI** 已安装时显示,令牌独立生成并持久化(`vscodium.connectionToken`),「打开」URL 同样携带令牌。`--server-data-dir` 固定**服务端**数据;要跨浏览器/隐私窗口/Safari 存储淘汰地保存设置,请写入**服务端 Machine 设置**——把 `vscode.machineSettingsFile`/`vscodium.machineSettingsFile` 指向一个 JSON 种子文件(其缺失的键会补进 `<server-data-dir>/data/Machine/settings.json`,目标已有键不覆盖),或使用 **Preferences → Open Remote Settings**。注意:浏览器*用户*设置不存在服务端,可能被淘汰(见常见问题)
   - `wetty` 卡片启动 **WeTTY 终端网页服务器**(`wetty --port <n> --host 0.0.0.0`),在浏览器中使用终端;该类型在 **`wetty` CLI** 已安装时显示。默认由 narthex 在卡片运行期间启动一个**仅监听 `127.0.0.1` 的私有 sshd**(端口取自 `wetty.sshPortRange`,默认 5300–5399),因此**无需开启系统 SSH / 远程登录**:浏览器只需输入运行 narthex 的 macOS 账号密码(私有 sshd 只接受该账号),停止卡片时临时端口同步关闭。把 `wetty.sshMode` 设为 `system`(或把 `wetty.sshHost` 指向远端主机)则改为登录已有 SSH 服务器。WeTTY **没有 HTTP 层鉴权**:明文 HTTP 下密码在网络上可见,建议把 `wetty.hostname` 保持为 `127.0.0.1`,或在前端加 HTTPS 反向代理。监听地址、端口范围与 SSH 目标来自 `wetty.*`;卡片不显示任何凭据
   - `emulatorjs` 卡片启动 **EmulatorJS 复古游戏模拟器**——在浏览器中玩 NES/SNES/Game Boy/Genesis/PlayStation 等游戏。EmulatorJS 本身**没有 CLI/服务器**,因此 narthex 重新执行自身二进制(内部 `emulator-serve` 子命令)来提供生成的玩家页、所选 ROM 以及可选的本地 EmulatorJS `data/` 目录。该类型在 **`emulatorjs.dirs` 非空**时显示;选择后列出各配置目录下(递归)识别到的 ROM,核心根据文件扩展名自动判定(`game.nes.zip` 亦可),所选 ROM 路径存入卡片。玩家页默认**同源代理在面板的 `/emulator/`**(经会话鉴权),无需额外端口;卡片编辑弹窗中的**反向代理开关**可改为打开子进程的直连端口。默认从**公共 CDN**(`cdn.emulatorjs.org`)加载 loader 与核心;把 `emulatorjs.dataPath` 指向本地 `data/` 目录即可**完全离线**(否则由 `emulatorjs.cdnVersion` 选择 CDN 版本)。注意:**多线程核心不可用**(narthex 不下发 COOP/COEP 头,以免影响面板)
+  - **`custom` 自定义卡片**可启动任意本地程序。添加时填写程序路径(绝对路径/`~/` 或直接从 PATH 与 `custom.pathDirs` 查找的命令名)、启动方式(参数模式或完整 `/bin/sh` 命令)、可选工作目录与端口模式(`auto` / `fixed` / `none`)。命令支持 `{port}` / `{host}` 占位符,并注入 `PORT` / `NARTHEX_HOST` 环境变量。卡片可直连打开、经面板同源 `/custom/<id>/` 反向代理,或使用独立网关端口(使用根绝对路径的应用应选独立网关)。**同源子路径模式会与 Narthex 共享 Origin**,可访问面板登录态与 API,仅应对可信应用使用。自定义卡还可启用安装命令(默认 `brew install `),支持手动安装或启动时检测不到程序自动安装,输出写入 `logs/<卡片ID>-install.log`
   - `comfyui` 检测位置:`/Applications` 与 `~/Applications`,可用 `NARTHEX_COMFY_APP_DIR` 覆盖;`opencode` 通过 PATH 检测 `opencode` CLI(可用 `NARTHEX_OPENCODE_BIN` 覆盖);`mdbook` 通过 PATH 检测 `mdbook` CLI(可用 `NARTHEX_MDBOOK_BIN` 覆盖);`gitvelo` 通过 PATH 检测 `gitvelo` CLI(可用 `NARTHEX_GITVELO_BIN` 覆盖);`vscode` 通过 PATH 检测 `code` CLI(可用 `NARTHEX_VSCODE_BIN` 覆盖);`vscodium` 通过 PATH 检测 `codium` CLI(可用 `NARTHEX_VSCODIUM_BIN` 覆盖);`wetty` 通过 PATH 检测 `wetty` CLI(可用 `NARTHEX_WETTY_BIN` 覆盖);`emulatorjs` 不需要外部二进制(narthex 自行提供;测试中可用 `NARTHEX_EMULATOR_BIN` 覆盖)
 - **实例管理**:实例进程由 Narthex 托管(独立进程组,可整树终止);状态灯 + 健康检查(TCP)+ 运行时长 + 内存(RSS);Narthex 重启后自动重新关联
 - **改密码**:`narthex passwd` 重设密码并轮转会话密钥,所有会话即刻失效
@@ -125,7 +126,7 @@ launchd 任务指向当前二进制(`os.Executable()`),移动或重新构建二�
 
 ## 使用
 
-1. **添加卡片**:点击「添加卡片」→ 选择应用(**ComfyUI** / **opencode** / **MdBook** / **GitVelo** / **VS Code** / **VSCodium** / **WeTTY** / **EmulatorJS**)→ 设置名称/图标/背景 → 创建。所有类型都会列出,不可添加的会置灰并显示原因(未安装、已装 ComfyUI Desktop 但无可用实例、已装 mdbook 但未配置书籍目录、EmulatorJS 未配置游戏目录、或已建卡片——每类仅一张)。没有路径、没有搜索——应用目录由后台自动检测(**MdBook** 类型会先让你在 `mdbook.dirs` 下选择书籍项目,或新建一本;**EmulatorJS** 类型会让你在 `emulatorjs.dirs` 下选择一个 ROM;所选目录/文件存入卡片)
+1. **添加卡片**:点击「添加卡片」→ 选择应用(**ComfyUI** / **opencode** / **MdBook** / **GitVelo** / **VS Code** / **VSCodium** / **WeTTY** / **EmulatorJS** / **自定义**)→ 设置名称/图标/背景 → 创建。所有类型都会列出,不可添加的会置灰并显示原因(未安装、已装 ComfyUI Desktop 但无可用实例、已装 mdbook 但未配置书籍目录、EmulatorJS 未配置游戏目录、或内置类型已建卡片)。**自定义**类型可重复添加,并会先填写程序/命令/端口/代理/安装配置。内置应用没有路径、没有搜索——应用目录由后台自动检测(**MdBook** 类型会先让你在 `mdbook.dirs` 下选择书籍项目,或新建一本;**EmulatorJS** 类型会让你在 `emulatorjs.dirs` 下选择一个 ROM;所选目录/文件存入卡片)
 2. **启动/停止**:卡片上点「启动」或「停止」;启动中的实例显示「启动中…」,就绪后显示绿色状态灯、内存占用与运行时长
 3. **打开**:点「打开」在新标签打开网页界面。**ComfyUI**/**VS Code**/**VSCodium**/**WeTTY** 直连 `http://<主机>:<端口>/`(VS Code / VSCodium 的链接会带上连接令牌 `?tkn=`,浏览器自动认证);**opencode** 与开启反代的 **GitVelo** 走各自的 narthex 网关,无需额外提示即可打开;**mdBook** 与 **EmulatorJS** 打开面板同源的 `/mdbook/` / `/emulator/` 路径(无需额外端口,单端口反向代理/隧道即可用)——它们的卡片编辑弹窗带有**反向代理开关**,关闭后「打开」URL 改用应用自身的直连端口(GitVelo 的开关会改变服务启动方式,只能在卡片停止时切换)。ComfyUI/VS Code/VSCodium/WeTTY 均监听 `0.0.0.0`,其它设备可用面板的同一主机名直达;若在「设置」里配置了**内部组网地址**,其跳转地址改用该地址(详见[配置](#配置))。
 4. **卡片详情**:点击卡片弹出详情,有什么显示什么——状态、类型、运行时长、内存、端口、目录与地址,以及凭据:**opencode 卡片显示网页登录的用户名、密码与直连 API 地址**(用户名 `opencode`),**VS Code / VSCodium 卡片显示连接令牌**,点击任意一行即可复制。**WeTTY 卡片不显示凭据**:默认 managed 模式下浏览器要求输入运行 narthex 的 macOS 账号密码;`system` 模式下要求输入 `wetty.sshHost`(默认 `localhost`)的 SSH 账号。凭据、编辑与删除不再显示在卡片正面——弹窗中提供**编辑**与**删除**操作。
@@ -162,7 +163,13 @@ launchd 任务指向当前二进制(`os.Executable()`),移动或重新构建二�
   "vscode": { "hostname": "0.0.0.0", "portRange": [4700, 4899], "connectionToken": "<自动生成>", "machineSettingsFile": "vscode-machine.json" },
   "vscodium": { "hostname": "0.0.0.0", "portRange": [4700, 4899], "connectionToken": "<自动生成>", "machineSettingsFile": "vscodium-machine.json" },
   "wetty": { "hostname": "0.0.0.0", "portRange": [4900, 5099], "sshMode": "managed", "sshPortRange": [5300, 5399], "sshHost": "localhost" },
-  "emulatorjs": { "hostname": "0.0.0.0", "portRange": [5100, 5299], "dirs": ["~/roms"], "dataPath": "", "cdnVersion": "stable" }
+  "emulatorjs": { "hostname": "0.0.0.0", "portRange": [5100, 5299], "dirs": ["~/roms"], "dataPath": "", "cdnVersion": "stable" },
+  "custom": {
+    "hostname": "0.0.0.0",
+    "portRange": [5600, 5799],
+    "gatewayPortRange": [26200, 26299],
+    "pathDirs": ["~/.local/bin", "~/go/bin"]
+  }
 }
 ```
 
@@ -204,7 +211,11 @@ launchd 任务指向当前二进制(`os.Executable()`),移动或重新构建二�
 - `emulatorjs.dirs`:递归扫描 ROM 的目录列表;为空时 EmulatorJS 卡片类型整体隐藏
 - `emulatorjs.dataPath`:本地 EmulatorJS `data/` 目录(loader、核心等),用它代替 CDN 以离线游玩;支持 `~/` 展开。为空则用 CDN
 - `emulatorjs.cdnVersion`:`dataPath` 为空时使用的 CDN 版本:`stable`(默认)/`latest`/`nightly`
-- 数据文件:状态 `state.json`(按应用类型存卡片,每类至多一张)、每实例日志 `logs/<cardID>.log`(WeTTY 私有 sshd 为 `<cardID>-sshd.log`)、导入图片 `uploads/`、WeTTY 私有 sshd 的配置与主机密钥(`wetty-sshd/`),以及 VS Code/VSCodium 的服务端数据(`vscode-data/` / `vscodium-data/`,由 `--server-data-dir` 指定,含补齐的 `data/Machine/settings.json`)均与配置同目录
+- `custom.hostname`:直连模式下通过 `{host}` 占位符提供给自定义程序的监听地址,默认 `0.0.0.0`
+- `custom.portRange`:自定义卡片自动分配端口时的范围,默认 [5600, 5799]
+- `custom.gatewayPortRange`:自定义卡片独立网关端口的分配范围,默认 [26200, 26299]
+- `custom.pathDirs`:裸命令名查找与子进程 `PATH` 前置的额外目录(如 `~/.local/bin`、`~/go/bin`),支持 `~/` 展开
+- 数据文件:状态 `state.json`(内置类型每类至多一张,自定义卡片可多张)、每实例日志 `logs/<cardID>.log`(WeTTY 私有 sshd 为 `<cardID>-sshd.log`)、导入图片 `uploads/`、WeTTY 私有 sshd 的配置与主机密钥(`wetty-sshd/`),以及 VS Code/VSCodium 的服务端数据(`vscode-data/` / `vscodium-data/`,由 `--server-data-dir` 指定,含补齐的 `data/Machine/settings.json`)均与配置同目录
 
 ## 外部访问(默认开启)
 
@@ -239,12 +250,15 @@ narthex serve --hostname 127.0.0.1           # 临时
 | GET | `/api/session` | 会话是否有效 + 界面语言(登录页据此显示语言) |
 | POST | `/api/account` | 修改用户名/密码(需当前密码),轮转会话密钥 |
 | GET | `/api/cards` | 卡片列表(含 running/healthy/memoryKB/uptime/url) |
-| POST | `/api/cards` | 创建卡片(`kind`: `comfyui`/`opencode`/`mdbook`/`gitvelo`/`vscode`/`vscodium`/`wetty`/`emulatorjs`;应用未安装 400,同类重复 409;`mdbook` 还需 `dir` 指向可识别项目;`emulatorjs` 还需 `dir` 指向可识别 ROM) |
+| POST | `/api/cards` | 创建卡片(`kind`: `comfyui`/`opencode`/`mdbook`/`gitvelo`/`vscode`/`vscodium`/`wetty`/`emulatorjs`/`custom`;应用未安装 400,内置类型同类重复 409;`mdbook` 还需 `dir` 指向可识别项目;`emulatorjs` 还需 `dir` 指向可识别 ROM;`custom` 携带 `custom` 对象且可重复创建) |
 | POST | `/api/cards/reorder` | 持久化卡片顺序(`{ids:[...]}` 按目标顺序;未知/重复 ID 忽略,未列出的卡片保持相对顺序并置于末尾) |
 | PATCH | `/api/cards/{id}` | 编辑名称/图标/背景;对 mdbook/emulatorjs/opencode/gitvelo 可用 `{proxy:bool}` 切换反向代理(false = 打开应用直连地址);GitVelo 运行中切换会返回 409(启动方式随之改变) |
 | DELETE | `/api/cards/{id}` | 删除(先停应用) |
 | POST | `/api/cards/{id}/start` | 启动应用(目录启动时自动检测) |
 | POST | `/api/cards/{id}/stop` | 停止应用 |
+| POST | `/api/cards/{id}/install` | 执行自定义卡片的安装命令(202,异步) |
+| GET | `/api/cards/{id}/install` | 查询安装状态与输出末尾 |
+| POST | `/api/cards/{id}/install/cancel` | 取消正在运行的安装 |
 | GET | `/api/meta` | 图标/背景(预设+导入)、检测到的应用(`apps`,含 installed/label)与当前设置(含 `internalAddress`) |
 | GET | `/api/mdbook/projects` | 列出配置的 `mdbook.dirs` 及其下识别到的书籍项目(`{dirs, projects:[{name,path}]}`) |
 | POST | `/api/mdbook/projects` | 在配置目录下新建书籍(`{dir, name}`,执行 `mdbook init`) |

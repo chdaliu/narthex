@@ -1,12 +1,15 @@
 package api
 
 import (
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	"narthex/internal/procman"
 	"narthex/internal/store"
 )
 
@@ -30,14 +33,17 @@ type cardRequest struct {
 	// Dir is the project directory for kinds that point at a project
 	// (mdbook) or the ROM file (emulatorjs); required for both.
 	Dir string `json:"dir"`
-	// Proxy is the per-card reverse-proxy switch of the proxy-capable kinds
-	// (mdbook/emulatorjs/opencode). nil leaves it unchanged; true uses the
-	// same-origin proxy, false the app's direct URL.
+	// Proxy is the per-card reverse-proxy switch of the proxy-capable
+	// built-in kinds. nil leaves it unchanged; true uses the same-origin
+	// proxy, false the app's direct URL.
 	Proxy *bool `json:"proxy"`
+	// Custom is the complete custom-card configuration. Only used for
+	// kind == "custom"; nil leaves it unchanged on PATCH.
+	Custom *store.CustomCard `json:"custom"`
 }
 
-// HandleCreateCard validates the kind (the app must be installed and the
-// kind not yet present — one card per kind) and adds a card.
+// HandleCreateCard validates the kind (built-in apps must be installed and
+// not yet present; custom cards may be repeated) and adds a card.
 func (s *Service) HandleCreateCard(w http.ResponseWriter, r *http.Request) {
 	var req cardRequest
 	if err := readJSON(r, &req); err != nil {
@@ -48,15 +54,16 @@ func (s *Service) HandleCreateCard(w http.ResponseWriter, r *http.Request) {
 	if kind == "" {
 		kind = store.KindComfyUI
 	}
-	if kind != store.KindComfyUI && kind != store.KindOpencode && kind != store.KindMdbook && kind != store.KindGitvelo && kind != store.KindVSCode && kind != store.KindVSCodium && kind != store.KindWetty && kind != store.KindEmulatorJS {
+	if kind != store.KindComfyUI && kind != store.KindOpencode && kind != store.KindMdbook && kind != store.KindGitvelo && kind != store.KindVSCode && kind != store.KindVSCodium && kind != store.KindWetty && kind != store.KindEmulatorJS && kind != store.KindCustom {
 		s.writeError(w, http.StatusBadRequest, "err.kindUnsupported", kind)
 		return
 	}
-	if !s.appInstalled(kind) {
+	if kind != store.KindCustom && !s.appInstalled(kind) {
 		s.writeError(w, http.StatusBadRequest, "err.appNotFound", kindLabel(kind))
 		return
 	}
 	dir := ""
+	custom := (*store.CustomCard)(nil)
 	switch kind {
 	case store.KindMdbook:
 		// The mdbook card must point at a recognized project under the
@@ -74,14 +81,32 @@ func (s *Service) HandleCreateCard(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusBadRequest, "err.emulatorNoGame")
 			return
 		}
+	case store.KindCustom:
+		custom = req.Custom
+		if custom == nil {
+			custom = &store.CustomCard{}
+		}
+		store.NormalizeCustomCard(custom)
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.reconcileGatewayLocked()
-	for _, c := range s.State.Cards {
-		if c.Kind == kind {
-			s.writeError(w, http.StatusConflict, "err.duplicateKind", kindLabel(kind))
+	if kind != store.KindCustom {
+		for _, c := range s.State.Cards {
+			if c.Kind == kind {
+				s.writeError(w, http.StatusConflict, "err.duplicateKind", kindLabel(kind))
+				return
+			}
+		}
+	}
+	if custom != nil {
+		if errKey := s.validateCustom(custom, ""); errKey != "" {
+			s.writeError(w, http.StatusBadRequest, errKey)
+			return
+		}
+		if errKey := s.ensureCustomGatewayPort(custom, ""); errKey != "" {
+			s.writeError(w, http.StatusBadRequest, errKey)
 			return
 		}
 	}
@@ -92,16 +117,19 @@ func (s *Service) HandleCreateCard(w http.ResponseWriter, r *http.Request) {
 		Background: defaultBackground(req.Background),
 		Kind:       kind,
 		Dir:        dir,
+		Custom:     custom,
 	}
 	s.State.Cards = append(s.State.Cards, card)
 	if err := s.save(); err != nil {
 		s.writeError(w, http.StatusInternalServerError, "err.saveFailed", err.Error())
 		return
 	}
+	s.reconcileGatewayLocked()
 	WriteJSON(w, http.StatusOK, s.view(card, r.Host))
 }
 
-// HandlePatchCard updates name/icon/background.
+// HandlePatchCard updates name/icon/background and, for custom cards, the
+// custom configuration.
 func (s *Service) HandlePatchCard(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var req cardRequest
@@ -126,7 +154,27 @@ func (s *Service) HandlePatchCard(w http.ResponseWriter, r *http.Request) {
 	if req.Background != "" {
 		card.Background = req.Background
 	}
-	if req.Proxy != nil && proxyCapable(card.Kind) {
+	if req.Custom != nil && card.Kind == store.KindCustom {
+		next := *req.Custom
+		store.NormalizeCustomCard(&next)
+		if errKey := s.validateCustom(&next, card.ID); errKey != "" {
+			s.writeError(w, http.StatusBadRequest, errKey)
+			return
+		}
+		if s.Backend.Status(card.Kind, card.PID, card.Port).Alive && customRuntimeChanged(card.Custom, &next) {
+			s.writeError(w, http.StatusConflict, "err.customEditRunning")
+			return
+		}
+		if errKey := s.ensureCustomGatewayPort(&next, card.ID); errKey != "" {
+			s.writeError(w, http.StatusBadRequest, errKey)
+			return
+		}
+		card.Custom = &next
+		delete(s.autoInstallFailed, card.ID)
+		delete(s.lastErrors, card.ID)
+		s.reconcileGatewayLocked()
+	}
+	if req.Proxy != nil && proxyCapable(card.Kind) && card.Kind != store.KindCustom {
 		// A plain bool cannot distinguish "unset" from false, so the field
 		// is a pointer: only an explicit value flips the switch.
 		//
@@ -205,9 +253,21 @@ func (s *Service) HandleDeleteCard(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusConflict, "err.cardRunning")
 		return
 	}
+	if r := s.installs[card.ID]; r != nil && r.running {
+		s.writeError(w, http.StatusConflict, "err.installRunning")
+		return
+	}
 	if card.PID > 0 {
 		s.Backend.Stop(card.PID)
 	}
+	if g := s.customGateways[card.ID]; g != nil {
+		g.Stop()
+		delete(s.customGateways, card.ID)
+		delete(s.customGatewayWanted, card.ID)
+	}
+	delete(s.installs, card.ID)
+	delete(s.lastErrors, card.ID)
+	delete(s.autoInstallFailed, card.ID)
 	s.State.Cards = append(s.State.Cards[:idx], s.State.Cards[idx+1:]...)
 	if err := s.save(); err != nil {
 		s.writeError(w, http.StatusInternalServerError, "err.saveFailed", err.Error())
@@ -217,43 +277,96 @@ func (s *Service) HandleDeleteCard(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// HandleStartCard launches the desktop app for the card. The app bundle is
-// auto-detected at start time.
+// HandleStartCard launches the app for the card. A custom card whose program
+// is missing may start an automatic install first and start itself once the
+// install succeeds.
 func (s *Service) HandleStartCard(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	idx := s.findCard(id)
 	if idx < 0 {
+		s.mu.Unlock()
 		s.writeError(w, http.StatusNotFound, "err.cardNotFound")
 		return
 	}
 	card := &s.State.Cards[idx]
 	if s.Backend.Status(card.Kind, card.PID, card.Port).Alive {
 		s.reconcileGatewayLocked()
-		WriteJSON(w, http.StatusOK, s.view(*card, r.Host))
+		v := s.view(*card, r.Host)
+		s.mu.Unlock()
+		WriteJSON(w, http.StatusOK, v)
 		return
 	}
-	if !s.appInstalled(card.Kind) {
+	if card.Kind != store.KindCustom && !s.appInstalled(card.Kind) {
+		s.mu.Unlock()
 		s.writeError(w, http.StatusBadRequest, "err.appNotFound", kindLabel(card.Kind))
 		return
 	}
-	dir := s.installDir(card.Kind, card.Dir)
-	pid, port, err := s.Backend.Start(card.Kind, dir, card.ID, s.browserHosts(r.Host), card.Kind == store.KindGitvelo && !card.DisableProxy)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "err.startFailed", err.Error())
+	if s.needsAutoInstallLocked(card) {
+		if s.autoInstallFailed[card.ID] {
+			s.mu.Unlock()
+			s.writeError(w, http.StatusBadRequest, "err.customExecNotFound", card.Custom.Exec)
+			return
+		}
+		st, errKey := s.beginInstallLocked(card, true, s.browserHosts(r.Host))
+		if errKey != "" {
+			s.mu.Unlock()
+			s.writeError(w, http.StatusBadRequest, errKey)
+			return
+		}
+		v := s.view(*card, r.Host)
+		s.mu.Unlock()
+		go s.runInstall(st, card.ID, true, s.browserHosts(r.Host))
+		WriteJSON(w, http.StatusOK, v)
 		return
+	}
+	v, errKey, err := s.startCardLocked(card, r.Host)
+	if errKey != "" {
+		s.mu.Unlock()
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, errKey, err.Error())
+		} else {
+			s.writeError(w, http.StatusBadRequest, errKey)
+		}
+		return
+	}
+	s.mu.Unlock()
+	WriteJSON(w, http.StatusOK, v)
+}
+
+// startCardLocked spawns the instance for card. Caller holds s.mu and has
+// verified that the card is stopped. It returns the updated view, an i18n
+// error key ("" on success), and the raw error for formatting.
+func (s *Service) startCardLocked(card *store.Card, reqHost string) (CardView, string, error) {
+	dir := s.installDir(card.Kind, card.Dir)
+	if card.Kind == store.KindCustom && card.Custom != nil && card.Custom.WorkDir != "" {
+		dir = store.ExpandPath(s.Dir, card.Custom.WorkDir)
+	}
+	spec := procman.StartSpec{
+		Card:   *card,
+		Dir:    dir,
+		Hosts:  s.browserHosts(reqHost),
+		NoAuth: card.Kind == store.KindGitvelo && !card.DisableProxy,
+	}
+	pid, port, err := s.Backend.Start(spec)
+	if err != nil {
+		s.lastErrors[card.ID] = err.Error()
+		return CardView{}, "err.startFailed", err
 	}
 	card.PID = pid
 	card.Port = port
 	card.StartedAt = time.Now().Unix()
+	if card.Kind == store.KindCustom && card.Custom != nil && card.Custom.PortMode == store.CustomPortAuto && port > 0 {
+		card.LastPort = port
+	}
+	delete(s.lastErrors, card.ID)
+	delete(s.autoInstallFailed, card.ID)
 	if err := s.save(); err != nil {
 		s.Backend.Stop(pid)
-		s.writeError(w, http.StatusInternalServerError, "err.saveFailed", err.Error())
-		return
+		return CardView{}, "err.saveFailed", err
 	}
 	s.reconcileGatewayLocked()
-	WriteJSON(w, http.StatusOK, s.view(*card, r.Host))
+	return s.view(*card, reqHost), "", nil
 }
 
 // HandleStopCard terminates the card's instance.
@@ -337,6 +450,9 @@ func (s *Service) appInstalled(kind string) bool {
 		// EmulatorJS has no external CLI: the kind is available once at
 		// least one game directory is configured.
 		return len(s.Config.EmulatorJS.Dirs) > 0
+	case store.KindCustom:
+		// Custom cards need no detection: the user supplies the program.
+		return true
 	}
 	return false
 }
@@ -362,6 +478,12 @@ func (s *Service) installDir(kind, cardDir string) string {
 	case store.KindGitvelo:
 		// The GitVelo web service reads its repositories from the whole
 		// filesystem; start it from the user's home like the other CLIs.
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+	case store.KindCustom:
+		// startCardLocked substitutes the card's WorkDir; the home is the
+		// fallback when it is empty.
 		if home, err := os.UserHomeDir(); err == nil {
 			return home
 		}
@@ -416,6 +538,8 @@ func kindLabel(kind string) string {
 		return "WeTTY"
 	case store.KindEmulatorJS:
 		return "EmulatorJS"
+	case store.KindCustom:
+		return "Custom"
 	}
 	return kind
 }
@@ -450,6 +574,8 @@ func defaultIcon(icon, kind string) string {
 			return "terminal"
 		case store.KindEmulatorJS:
 			return "gamepad-2"
+		case store.KindCustom:
+			return "rocket"
 		}
 	}
 	return icon
@@ -460,4 +586,115 @@ func defaultBackground(bg string) string {
 		return "bg-01"
 	}
 	return bg
+}
+
+// validateCustom checks a custom-card configuration and returns an i18n
+// error key, or "" when it is valid. cardID is the card being updated (empty
+// on create), used to ignore its own fixed ports during conflict checks.
+func (s *Service) validateCustom(c *store.CustomCard, cardID string) string {
+	if c == nil {
+		return "err.customRequired"
+	}
+	store.NormalizeCustomCard(c)
+	if len(c.Exec) > 1024 || len(c.Command) > 4096 || len(c.WorkDir) > 1024 || len(c.InstallCommand) > 4096 {
+		return "err.customTooLong"
+	}
+	if c.ExecMode == store.CustomExecArgs && strings.TrimSpace(c.Exec) == "" {
+		return "err.customExecRequired"
+	}
+	if c.ExecMode == store.CustomExecShell && strings.TrimSpace(c.Command) == "" {
+		return "err.customCommandRequired"
+	}
+	if c.ProxyMode != store.CustomProxyOff && c.PortMode == store.CustomPortNone {
+		return "err.customProxyNeedsPort"
+	}
+	if c.PortMode == store.CustomPortFixed {
+		if c.Port < 1 || c.Port > 65535 {
+			return "err.customPortInvalid"
+		}
+		if c.Port == s.Config.Port {
+			return "err.customPortConflict"
+		}
+		for i := range s.State.Cards {
+			other := &s.State.Cards[i]
+			if other.ID == cardID || other.Kind != store.KindCustom || other.Custom == nil {
+				continue
+			}
+			if other.Custom.PortMode == store.CustomPortFixed && other.Custom.Port == c.Port {
+				return "err.customPortConflict"
+			}
+		}
+	}
+	if c.ProxyMode == store.CustomProxyGateway && c.GatewayPort != 0 {
+		if c.GatewayPort < 1 || c.GatewayPort > 65535 || c.GatewayPort == s.Config.Port {
+			return "err.customGatewayPortInvalid"
+		}
+		for i := range s.State.Cards {
+			other := &s.State.Cards[i]
+			if other.ID == cardID || other.Kind != store.KindCustom || other.Custom == nil {
+				continue
+			}
+			if other.Custom.ProxyMode == store.CustomProxyGateway && other.Custom.GatewayPort == c.GatewayPort {
+				return "err.customGatewayPortConflict"
+			}
+		}
+	}
+	if c.InstallEnabled && strings.TrimSpace(c.InstallCommand) == "" {
+		return "err.installNoCommand"
+	}
+	return ""
+}
+
+// customRuntimeChanged reports whether next changes a field that is baked
+// into the running process and therefore requires a stop/start.
+func customRuntimeChanged(cur, next *store.CustomCard) bool {
+	if cur == nil {
+		return true
+	}
+	return cur.ExecMode != next.ExecMode ||
+		cur.Exec != next.Exec ||
+		cur.Command != next.Command ||
+		cur.WorkDir != next.WorkDir ||
+		cur.PortMode != next.PortMode ||
+		cur.Port != next.Port
+}
+
+// ensureCustomGatewayPort allocates and persists a preferred gateway port
+// for a custom card in gateway proxy mode. Caller holds s.mu.
+func (s *Service) ensureCustomGatewayPort(c *store.CustomCard, cardID string) string {
+	if c == nil || c.ProxyMode != store.CustomProxyGateway || c.GatewayPort != 0 {
+		return ""
+	}
+	lo, hi := s.Config.Custom.GatewayPortRange[0], s.Config.Custom.GatewayPortRange[1]
+	for p := lo; p <= hi; p++ {
+		if p == s.Config.Port || p == s.Config.Opencode.GatewayPort || p == s.Config.Gitvelo.GatewayPort {
+			continue
+		}
+		used := false
+		for i := range s.State.Cards {
+			other := &s.State.Cards[i]
+			if other.ID == cardID || other.Kind != store.KindCustom || other.Custom == nil {
+				continue
+			}
+			if other.Custom.ProxyMode == store.CustomProxyGateway && other.Custom.GatewayPort == p {
+				used = true
+				break
+			}
+		}
+		if used || !apiPortAvailable(p) {
+			continue
+		}
+		c.GatewayPort = p
+		return ""
+	}
+	return "err.customGatewayPortUnavailable"
+}
+
+func apiPortAvailable(port int) bool {
+	l, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		return false
+	}
+	l.Close()
+	return true
 }
