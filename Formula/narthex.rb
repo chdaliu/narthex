@@ -1,12 +1,12 @@
-# Master copy of the Homebrew formula: sync into the homebrew-tap repo
-# (github.com/chdaliu/homebrew-tap) after each release, or install locally with
-# `brew install --build-from-source ./Formula/narthex.rb`.
-# sha256 placeholders: fill from the release SHA256SUMS.
+# Master copy of the macOS-only Homebrew formula: sync into the homebrew-tap
+# repo (github.com/chdaliu/homebrew-tap) after each release, or install locally
+# with `brew install --build-from-source ./Formula/narthex.rb`.
+# sha256 values come from the release SHA256SUMS.
 class Narthex < Formula
   desc "Lightweight web dashboard to launch and stop local apps"
   homepage "https://github.com/chdaliu/narthex"
+  version "0.3.0" # keep in sync with the latest release tag
   license "MIT"
-  version "0.2.0" # keep in sync with the latest release tag
 
   livecheck do
     url :stable
@@ -14,22 +14,15 @@ class Narthex < Formula
     strategy :github_latest
   end
 
+  # macOS-only release: the Homebrew tap ships the two darwin builds and no
+  # Linux bottles/tarballs.
   on_macos do
     if Hardware::CPU.arm?
       url "https://github.com/chdaliu/narthex/releases/download/v#{version}/narthex_#{version}_darwin_arm64.tar.gz"
-      sha256 "caffe965d66256596e77b96d5e9e0db9cd07c05d10d461a9fc9000ec6266a966"
+      sha256 "84c8dd7ba077c5cb5429a58cda9dc798577c359ffb96da602d5cb1b488a68a5d"
     else
       url "https://github.com/chdaliu/narthex/releases/download/v#{version}/narthex_#{version}_darwin_amd64.tar.gz"
-      sha256 "bc209ae2efef3884415a708ecc6653e87e822b5c54cc8fffa7362ce6d34eae84"
-    end
-  end
-  on_linux do
-    if Hardware::CPU.arm? && Hardware::CPU.is_64_bit?
-      url "https://github.com/chdaliu/narthex/releases/download/v#{version}/narthex_#{version}_linux_arm64.tar.gz"
-      sha256 "02242fac51333fb99df9a8484116ac69673edd61faa87918def2496d1dc877a9"
-    else
-      url "https://github.com/chdaliu/narthex/releases/download/v#{version}/narthex_#{version}_linux_amd64.tar.gz"
-      sha256 "232ce0c9170be4446c1a3429330763f450fb941e3b341302dce5960fffebeec6"
+      sha256 "af6bac45c0f1e19a648868f08c8c306d5cb8cfa3f26bf5842db66f6dd30e024e"
     end
   end
 
