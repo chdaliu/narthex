@@ -1,5 +1,5 @@
 // Command narthex is a lightweight web dashboard to launch and manage
-// desktop apps (ComfyUI Desktop) and the opencode web interface.
+// local desktop apps and web services.
 package main
 
 import (
@@ -17,7 +17,6 @@ import (
 	"narthex/internal/api"
 	"narthex/internal/auth"
 	"narthex/internal/autostart"
-	"narthex/internal/emulatorserver"
 	"narthex/internal/i18n"
 	"narthex/internal/netutil"
 	"narthex/internal/procman"
@@ -40,10 +39,6 @@ func main() {
 	switch os.Args[1] {
 	case "serve", "start":
 		err = cmdServe(os.Args[2:])
-	case "emulator-serve":
-		// Internal, undocumented: spawned by procman.startEmulatorJS because
-		// EmulatorJS ships no server of its own (narthex serves it itself).
-		err = cmdEmulatorServe(os.Args[2:])
 	case "setup":
 		err = cmdSetup(os.Args[2:])
 	case "passwd":
@@ -200,18 +195,6 @@ func cmdServe(args []string) error {
 	backend.VscodiumDataDir = dataDirFor(dir, cfg.Vscodium.DataDir, "vscodium-data")
 	backend.VscodeMachineSettingsFile = resolveFromDir(dir, cfg.Vscode.MachineSettingsFile)
 	backend.VscodiumMachineSettingsFile = resolveFromDir(dir, cfg.Vscodium.MachineSettingsFile)
-	backend.WettyHostname = cfg.Wetty.Hostname
-	backend.WettyPortRange = cfg.Wetty.PortRange
-	backend.WettySSHMode = cfg.Wetty.SSHMode
-	backend.WettySSHPortRange = cfg.Wetty.SSHPortRange
-	backend.WettySSHDDir = filepath.Join(dir, "wetty-sshd")
-	backend.WettySSHHost = cfg.Wetty.SSHHost
-	backend.WettySSHPort = cfg.Wetty.SSHPort
-	backend.WettySSHUser = cfg.Wetty.SSHUser
-	backend.EmulatorHostname = cfg.EmulatorJS.Hostname
-	backend.EmulatorPortRange = cfg.EmulatorJS.PortRange
-	backend.EmulatorDataDir = resolveFromDir(dir, cfg.EmulatorJS.DataPath)
-	backend.EmulatorCDNVersion = cfg.EmulatorJS.CDNVersion
 	backend.CustomHostname = cfg.Custom.Hostname
 	backend.CustomPortRange = cfg.Custom.PortRange
 	backend.CustomPathDirs = cfg.Custom.PathDirs
@@ -297,42 +280,7 @@ func detectedApps(cfg *store.Config) []string {
 	if procman.DetectVSCodium() != "" {
 		labels = append(labels, "VSCodium")
 	}
-	if procman.DetectWetty() != "" {
-		labels = append(labels, "WeTTY")
-	}
-	if len(cfg.EmulatorJS.Dirs) > 0 {
-		labels = append(labels, "EmulatorJS")
-	}
 	return labels
-}
-
-// cmdEmulatorServe runs the EmulatorJS child server (the hidden
-// `emulator-serve` subcommand). It is spawned by procman.startEmulatorJS and
-// never run by users directly: EmulatorJS has no CLI/server, so narthex
-// re-execs itself to serve the player page, the ROM and an optional local
-// data/ directory.
-func cmdEmulatorServe(args []string) error {
-	fs := flag.NewFlagSet("emulator-serve", flag.ExitOnError)
-	rom := fs.String("rom", "", "ROM file path")
-	core := fs.String("core", "", "EmulatorJS core name")
-	name := fs.String("name", "", "game name")
-	host := fs.String("host", "0.0.0.0", "listen address")
-	port := fs.Int("port", 0, "listen port")
-	data := fs.String("data", "", "local EmulatorJS data/ directory (empty = CDN)")
-	cdn := fs.String("cdn", "stable", "CDN version (stable/latest/nightly)")
-	fs.Parse(args)
-	if *rom == "" || *core == "" || *port <= 0 {
-		return fmt.Errorf("emulator-serve: --rom, --core and --port are required")
-	}
-	return emulatorserver.Run(emulatorserver.Options{
-		ROM:        *rom,
-		Core:       *core,
-		Name:       *name,
-		Hostname:   *host,
-		Port:       *port,
-		DataDir:    *data,
-		CDNVersion: *cdn,
-	})
 }
 
 // firstRunSetup creates a fresh config with a random password when none

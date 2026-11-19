@@ -52,7 +52,6 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("GET /api/meta", s.svc.HandleMeta)
 	protected.HandleFunc("GET /api/mdbook/projects", s.svc.HandleMdbookProjects)
 	protected.HandleFunc("POST /api/mdbook/projects", s.svc.HandleMdbookCreate)
-	protected.HandleFunc("GET /api/emulator/games", s.svc.HandleEmulatorGames)
 	protected.HandleFunc("POST /api/settings", s.svc.HandleSettings)
 	protected.HandleFunc("POST /api/account", s.svc.HandleAccount)
 	protected.HandleFunc("POST /api/restart", s.svc.HandleRestart)
@@ -70,9 +69,6 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle(gateway.MdbookPrefix+"/", mdbook)
 	mux.Handle("/__livereload", mdbook)
 
-	// The running EmulatorJS server is proxied same-origin as well.
-	mux.Handle(gateway.EmulatorPrefix+"/", s.EmulatorHandler())
-
 	// Custom cards in path proxy mode are proxied same-origin under
 	// /custom/<cardID>/.
 	mux.Handle(gateway.CustomPrefix+"/", s.CustomHandler())
@@ -87,14 +83,6 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) MdbookHandler() http.Handler {
 	return gateway.MdbookHandler(s.cfg, s.svc.Lang, func() (string, bool) {
 		return s.svc.MdbookGatewayTarget()
-	})
-}
-
-// EmulatorHandler returns the same-origin reverse-proxy handler for the
-// running EmulatorJS server (see gateway.EmulatorHandler).
-func (s *Server) EmulatorHandler() http.Handler {
-	return gateway.EmulatorHandler(s.cfg, s.svc.Lang, func() (string, bool) {
-		return s.svc.EmulatorGatewayTarget()
 	})
 }
 

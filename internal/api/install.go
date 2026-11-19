@@ -47,7 +47,7 @@ func (s *Service) HandleInstallCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	card := &s.State.Cards[idx]
-	st, errKey := s.beginInstallLocked(card, false, s.browserHosts(r.Host))
+	st, errKey := s.beginInstallLocked(card, false)
 	if errKey != "" {
 		s.mu.Unlock()
 		status := http.StatusBadRequest
@@ -58,7 +58,7 @@ func (s *Service) HandleInstallCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Unlock()
-	go s.runInstall(st, card.ID, false, s.browserHosts(r.Host))
+	go s.runInstall(st, card.ID, false, r.Host)
 	WriteJSON(w, http.StatusAccepted, s.installStatus(st))
 }
 
@@ -166,9 +166,6 @@ func (s *Service) beginUpdateLocked(card *store.Card) (*installRun, string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), installTimeout)
 	dir := s.installDir(card.Kind, card.Dir)
-	if card.Kind == store.KindEmulatorJS && card.Dir != "" {
-		dir = filepath.Dir(card.Dir)
-	}
 	st := &installRun{
 		cardID:    card.ID,
 		running:   true,
@@ -234,7 +231,7 @@ func (s *Service) maintenanceRunningLocked(cardID string) bool {
 
 // beginInstallLocked validates and registers an install run. Caller holds
 // s.mu.
-func (s *Service) beginInstallLocked(card *store.Card, autoStart bool, hosts []string) (*installRun, string) {
+func (s *Service) beginInstallLocked(card *store.Card, autoStart bool) (*installRun, string) {
 	if card.Kind != store.KindCustom || card.Custom == nil {
 		return nil, "err.installDisabled"
 	}
@@ -277,20 +274,20 @@ func (s *Service) beginInstallLocked(card *store.Card, autoStart bool, hosts []s
 
 // runInstall executes a registered install and, for auto installs, starts
 // the card when it succeeds. It never holds s.mu while the command runs.
-func (s *Service) runInstall(st *installRun, cardID string, autoStart bool, hosts []string) {
+func (s *Service) runInstall(st *installRun, cardID string, autoStart bool, reqHost string) {
 	select {
 	case s.installSem <- struct{}{}:
 		defer func() { <-s.installSem }()
 	case <-st.ctx.Done():
-		s.finishInstall(st, st.ctx.Err(), false, hosts)
+		s.finishInstall(st, st.ctx.Err(), false, reqHost)
 		return
 	}
 
 	err := s.RunInstall(st.ctx, st.command, st.dir, st.logPath, st.pathDirs)
-	s.finishInstall(st, err, autoStart, hosts)
+	s.finishInstall(st, err, autoStart, reqHost)
 }
 
-func (s *Service) finishInstall(st *installRun, err error, autoStart bool, hosts []string) {
+func (s *Service) finishInstall(st *installRun, err error, autoStart bool, reqHost string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if st.cancel != nil {
@@ -318,10 +315,6 @@ func (s *Service) finishInstall(st *installRun, err error, autoStart bool, hosts
 	card := &s.State.Cards[idx]
 	if s.Backend.Status(card.Kind, card.PID, card.Port).Alive {
 		return
-	}
-	reqHost := ""
-	if len(hosts) > 0 {
-		reqHost = hosts[0]
 	}
 	if _, errKey, startErr := s.startCardLocked(card, reqHost); errKey != "" {
 		s.autoInstallFailed[st.cardID] = true

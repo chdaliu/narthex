@@ -18,10 +18,6 @@ type StartSpec struct {
 	Card store.Card
 	// Dir is the working directory resolved by the API for built-in kinds.
 	Dir string
-	// Hosts lists the browser-side hostnames the card will be opened from
-	// (empty for purely local use); servers with origin checks (WeTTY >= 4)
-	// derive their trusted origins from it.
-	Hosts []string
 	// NoAuth asks the app's server to skip its own login gate so it can be
 	// fronted by the narthex gateway (gitvelo proxy mode); it is ignored by
 	// kinds whose server has no such switch.

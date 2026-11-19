@@ -16,8 +16,7 @@ type PreparedLaunch struct {
 	Dir    string
 	Port   int
 	OnExit []func(pid int)
-	// AfterStart runs immediately after a successful spawn (used by WeTTY to
-	// verify the child survived and record its sidecar state).
+	// AfterStart runs immediately after a successful spawn.
 	AfterStart func(pid int) error
 	// Cleanup releases side effects when the spawn or AfterStart fails.
 	Cleanup func()
@@ -28,15 +27,13 @@ type launcher struct {
 }
 
 var launchers = map[string]launcher{
-	store.KindComfyUI:    {prepare: prepareComfyUI},
-	store.KindOpencode:   {prepare: prepareOpencode},
-	store.KindMdbook:     {prepare: prepareMdbook},
-	store.KindGitvelo:    {prepare: prepareGitvelo},
-	store.KindVSCode:     {prepare: prepareVSCode},
-	store.KindVSCodium:   {prepare: prepareVSCodium},
-	store.KindWetty:      {prepare: prepareWetty},
-	store.KindEmulatorJS: {prepare: prepareEmulatorJS},
-	store.KindCustom:     {prepare: prepareCustom},
+	store.KindComfyUI:  {prepare: prepareComfyUI},
+	store.KindOpencode: {prepare: prepareOpencode},
+	store.KindMdbook:   {prepare: prepareMdbook},
+	store.KindGitvelo:  {prepare: prepareGitvelo},
+	store.KindVSCode:   {prepare: prepareVSCode},
+	store.KindVSCodium: {prepare: prepareVSCodium},
+	store.KindCustom:   {prepare: prepareCustom},
 }
 
 // Start launches the instance described by spec through the registered

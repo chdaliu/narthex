@@ -156,43 +156,6 @@ exit 0
 SHIM
 chmod +x "$TMP/bin/codium"
 
-# Fake `wetty` CLI: serves HTTP on the port given via `--port`, and records
-# its arguments so the card test can assert the origin allowlist.
-cat > "$TMP/bin/wetty" <<'SHIM'
-#!/bin/sh
-if [ -n "$NARTHEX_WETTY_ARGS_FILE" ]; then
-  printf '%s\n' "$*" > "$NARTHEX_WETTY_ARGS_FILE"
-fi
-port=4900
-prev=
-for a in "$@"; do
-  if [ "$prev" = "--port" ]; then port=$a; fi
-  prev=$a
-done
-exec python3 -m http.server "$port" --bind 127.0.0.1
-SHIM
-chmod +x "$TMP/bin/wetty"
-
-# Fake `sshd` for the managed WeTTY endpoint: serves HTTP on the port given
-# via `-p` and records its arguments so the smoke can assert the temporary
-# loopback port opens and closes with the card. No exec: the shell keeps the
-# generated config path on its command line, which is what the manager
-# verifies before killing a pid recorded in the state file.
-cat > "$TMP/bin/sshd" <<'SHIM'
-#!/bin/sh
-if [ -n "$NARTHEX_SSHD_ARGS_FILE" ]; then
-  printf '%s\n' "$*" > "$NARTHEX_SSHD_ARGS_FILE"
-fi
-port=5300
-prev=
-for a in "$@"; do
-  if [ "$prev" = "-p" ]; then port=$a; fi
-  prev=$a
-done
-python3 -m http.server "$port" --bind 127.0.0.1
-SHIM
-chmod +x "$TMP/bin/sshd"
-
 # A recognized mdBook project plus a configured project directory.
 MDBOOK_BOOKS="$TMP/mdbook-books"
 mkdir -p "$MDBOOK_BOOKS/guide/src"
@@ -202,12 +165,6 @@ title = "Guide"
 EOF
 printf '# Summary\n\n- [Chapter 1](./chapter_1.md)\n' > "$MDBOOK_BOOKS/guide/src/SUMMARY.md"
 printf '# Chapter 1\n' > "$MDBOOK_BOOKS/guide/src/chapter_1.md"
-
-# A configured game directory with one recognized ROM for the EmulatorJS
-# card (a real tiny file; the player serves it, no emulation happens here).
-EMU_ROMS="$TMP/roms"
-mkdir -p "$EMU_ROMS"
-printf 'NESROM' > "$EMU_ROMS/mario.nes"
 
 fail() { echo "FAIL: $1" >&2; exit 1; }
 
@@ -231,14 +188,6 @@ cfg, books, machine = sys.argv[1], sys.argv[2], sys.argv[3]
 c = json.load(open(cfg))
 c.setdefault("mdbook", {})["dirs"] = [books]
 c.setdefault("vscodium", {})["machineSettingsFile"] = machine
-json.dump(c, open(cfg, "w"), indent=2)
-PY
-# Configure the EmulatorJS game directory so the emulatorjs card kind shows.
-python3 - "$CFG" "$EMU_ROMS" <<'PY'
-import json, sys
-cfg, roms = sys.argv[1], sys.argv[2]
-c = json.load(open(cfg))
-c.setdefault("emulatorjs", {})["dirs"] = [roms]
 json.dump(c, open(cfg, "w"), indent=2)
 PY
 # A pre-existing server-side Machine setting that the seed must preserve.
@@ -265,7 +214,7 @@ kill "$AUTO_PID" 2>/dev/null || true
 wait "$AUTO_PID" 2>/dev/null || true
 
 echo "== serve =="
-OC_ENV_FILE="$TMP/opencode-env.txt" GV_ARGS_FILE="$TMP/gitvelo-args.txt" PATH="$TMP/bin:$PATH" NARTHEX_COMFY_APP_DIR="$COMFYAPP" NARTHEX_COMFY_DESKTOP_DIR="$COMFYDESK" NARTHEX_MDBOOK_BIN="$TMP/bin/mdbook" NARTHEX_VSCODE_BIN="$TMP/bin/code" NARTHEX_VSCODIUM_BIN="$TMP/bin/codium" NARTHEX_WETTY_BIN="$TMP/bin/wetty" NARTHEX_WETTY_ARGS_FILE="$TMP/wetty-args.txt" NARTHEX_SSHD_BIN="$TMP/bin/sshd" NARTHEX_SSHD_ARGS_FILE="$TMP/sshd-args.txt" "$BIN" serve --config "$CFG" --port "$PORT" >"$TMP/server.log" 2>&1 &
+OC_ENV_FILE="$TMP/opencode-env.txt" GV_ARGS_FILE="$TMP/gitvelo-args.txt" PATH="$TMP/bin:$PATH" NARTHEX_COMFY_APP_DIR="$COMFYAPP" NARTHEX_COMFY_DESKTOP_DIR="$COMFYDESK" NARTHEX_MDBOOK_BIN="$TMP/bin/mdbook" NARTHEX_VSCODE_BIN="$TMP/bin/code" NARTHEX_VSCODIUM_BIN="$TMP/bin/codium" "$BIN" serve --config "$CFG" --port "$PORT" >"$TMP/server.log" 2>&1 &
 SRV_PID=$!
 for _ in $(seq 1 40); do
   curl -fsS "http://127.0.0.1:$PORT/api/session" >/dev/null 2>&1 && break
@@ -304,11 +253,7 @@ assert apps['gitvelo']['label'] == 'GitVelo', apps
 assert apps['vscode']['installed'] is True, apps
 assert apps['vscode']['label'] == 'VS Code', apps
 assert apps['vscodium']['installed'] is True, apps
-assert apps['vscodium']['label'] == 'VSCodium', apps
-assert apps['wetty']['installed'] is True, apps
-assert apps['wetty']['label'] == 'WeTTY', apps
-assert apps['emulatorjs']['installed'] is True, apps
-assert apps['emulatorjs']['label'] == 'EmulatorJS', apps"
+assert apps['vscodium']['label'] == 'VSCodium', apps"
 
 echo "== language switch =="
 curl -fsS -b "$COOKIE" "http://127.0.0.1:$PORT/api/meta" | python3 -c 'import sys,json;assert json.load(sys.stdin)["lang"]=="en","default lang should be en"'
@@ -628,119 +573,6 @@ assert m and 4700 <= int(m.group(1)) <= 4899, c
 assert '?tkn=' in c['url'] and c['password'], c" "$ID"
 curl -fsS -b "$COOKIE" -X POST "http://127.0.0.1:$PORT/api/cards/$ID/stop" >/dev/null || fail "vscodium stop failed"
 curl -fsS -b "$COOKIE" -X DELETE "http://127.0.0.1:$PORT/api/cards/$ID" >/dev/null || fail "vscodium delete failed"
-
-echo "== wetty card =="
-CARD=$(curl -fsS -b "$COOKIE" -H 'Content-Type: application/json' \
-  -d '{"kind":"wetty"}' \
-  "http://127.0.0.1:$PORT/api/cards")
-ID=$(python3 -c "import sys,json;print(json.loads(sys.argv[1])['id'])" "$CARD")
-[ -n "$ID" ] || fail "no wetty card id in response"
-echo "$CARD" | python3 -c "import sys,json;c=json.load(sys.stdin);assert c['kind']=='wetty' and c['icon']=='terminal' and c['name']=='WeTTY',c"
-echo "$CARD" | python3 -c "import sys,json;c=json.load(sys.stdin);assert 'username' not in c and 'password' not in c,c"
-curl -fsS -b "$COOKIE" -X POST "http://127.0.0.1:$PORT/api/cards/$ID/start" >/dev/null || fail "wetty start failed"
-RUN="no"
-for _ in $(seq 1 40); do
-  STATUS=$(curl -fsS -b "$COOKIE" "http://127.0.0.1:$PORT/api/cards")
-  RUN=$(echo "$STATUS" | python3 -c "import sys,json;c=[x for x in json.load(sys.stdin)['cards'] if x['id']=='$ID'][0];print('yes' if c['running'] and c['healthy'] else 'no')")
-  [ "$RUN" = "yes" ] && break
-  sleep 0.5
-done
-[ "$RUN" = "yes" ] || { echo "$STATUS"; fail "wetty did not become running"; }
-echo "$STATUS" | python3 -c "
-import sys, json, re
-c = [x for x in json.load(sys.stdin)['cards'] if x['id'] == sys.argv[1]][0]
-m = re.search(r':(\d+)/', c['url'])
-assert m and 4900 <= int(m.group(1)) <= 5099, c" "$ID"
-WETTYARGS=$(cat "$TMP/wetty-args.txt") || fail "wetty args dump missing"
-PORTWETTY=$(python3 -c "import sys,re;m=re.search(r'--port (\d+)',sys.argv[1]);print(m.group(1) if m else '')" "$WETTYARGS")
-[ -n "$PORTWETTY" ] || fail "wetty args missing --port: $WETTYARGS"
-python3 - "$WETTYARGS" "$PORTWETTY" <<'PY'
-import sys
-args, port = sys.argv[1], sys.argv[2]
-assert f'--allowed-origin http://localhost:{port}' in args, args
-assert f'--allowed-origin http://127.0.0.1:{port}' in args, args
-assert args.count('--allowed-origin') == 2, args
-PY
-# Managed mode: WeTTY talks to a private loopback sshd whose temporary port
-# must be open while the card runs and closed with it.
-SSHDARGS=$(cat "$TMP/sshd-args.txt") || fail "managed sshd args dump missing"
-PORTSSH=$(python3 -c "import sys,re;m=re.search(r'-p (\d+)',sys.argv[1]);print(m.group(1) if m else '')" "$SSHDARGS")
-[ -n "$PORTSSH" ] || fail "managed sshd args missing -p: $SSHDARGS"
-python3 - "$WETTYARGS" "$SSHDARGS" "$PORTSSH" "$TMP/wetty-sshd/sshd_config" <<'PY'
-import sys
-wetty, sshd, port, cfg = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-assert '--ssh-host 127.0.0.1' in wetty, wetty
-assert f'--ssh-port {port}' in wetty, wetty
-assert 5300 <= int(port) <= 5399, port
-assert f'-f {cfg}' in sshd, sshd
-assert f'-p {port}' in sshd, sshd
-PY
-python3 - "$TMP/wetty-sshd/state.json" "$PORTSSH" <<'PY'
-import json, sys
-st = json.load(open(sys.argv[1]))
-assert st['sshdPid'] > 0 and st['wettyPid'] > 0, st
-assert st['sshPort'] == int(sys.argv[2]), st
-PY
-python3 -c 'import socket,sys;s=socket.socket();s.settimeout(1);sys.exit(0 if s.connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0 else 1)' "$PORTSSH" || fail "managed sshd port $PORTSSH is not open"
-curl -fsS -b "$COOKIE" -X POST "http://127.0.0.1:$PORT/api/cards/$ID/stop" >/dev/null || fail "wetty stop failed"
-for _ in $(seq 1 20); do
-  python3 -c 'import socket,sys;s=socket.socket();s.settimeout(1);sys.exit(0 if s.connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0 else 1)' "$PORTSSH" || break
-  sleep 0.1
-done
-python3 -c 'import socket,sys;s=socket.socket();s.settimeout(1);sys.exit(0 if s.connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0 else 1)' "$PORTSSH" && fail "managed sshd port $PORTSSH still open after stop"
-[ ! -f "$TMP/wetty-sshd/state.json" ] || fail "managed sshd state should be removed after stop"
-curl -fsS -b "$COOKIE" -X DELETE "http://127.0.0.1:$PORT/api/cards/$ID" >/dev/null || fail "wetty delete failed"
-
-echo "== emulatorjs games API =="
-curl -fsS -b "$COOKIE" "http://127.0.0.1:$PORT/api/emulator/games" | python3 -c "
-import sys, json
-r = json.load(sys.stdin)
-assert r['dirs'] == ['$EMU_ROMS'], r
-g = [x for x in r['games'] if x['path'] == '$EMU_ROMS/mario.nes']
-assert g and g[0]['core'] == 'fceumm', r"
-
-echo "== emulatorjs card + proxy toggle =="
-CARD=$(curl -fsS -b "$COOKIE" -H 'Content-Type: application/json' \
-  -d "{\"kind\":\"emulatorjs\",\"dir\":\"$EMU_ROMS/mario.nes\"}" \
-  "http://127.0.0.1:$PORT/api/cards")
-ID=$(python3 -c "import sys,json;print(json.loads(sys.argv[1])['id'])" "$CARD")
-[ -n "$ID" ] || fail "no emulatorjs card id in response"
-echo "$CARD" | python3 -c "import sys,json;c=json.load(sys.stdin);assert c['kind']=='emulatorjs' and c['icon']=='gamepad-2' and c['name']=='EmulatorJS' and c['dir']=='$EMU_ROMS/mario.nes',c"
-# A card without a recognized ROM is rejected.
-code=$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" -H 'Content-Type: application/json' \
-  -d '{"kind":"emulatorjs","dir":"/nope/x.nes"}' "http://127.0.0.1:$PORT/api/cards")
-[ "$code" = "400" ] || fail "emulatorjs card without a game should be 400, got $code"
-curl -fsS -b "$COOKIE" -X POST "http://127.0.0.1:$PORT/api/cards/$ID/start" >/dev/null || fail "emulatorjs start failed"
-RUN="no"
-for _ in $(seq 1 40); do
-  STATUS=$(curl -fsS -b "$COOKIE" "http://127.0.0.1:$PORT/api/cards")
-  RUN=$(echo "$STATUS" | python3 -c "import sys,json;c=[x for x in json.load(sys.stdin)['cards'] if x['id']=='$ID'][0];print('yes' if c['running'] and c['healthy'] else 'no')")
-  [ "$RUN" = "yes" ] && break
-  sleep 0.5
-done
-[ "$RUN" = "yes" ] || { echo "$STATUS"; fail "emulatorjs did not become running"; }
-# Proxy on (default): the card "Open" URL is the same-origin path, which is
-# session-gated and serves the generated EmulatorJS player page.
-echo "$STATUS" | python3 -c "import sys,json;c=[x for x in json.load(sys.stdin)['cards'] if x['id']=='$ID'][0];assert c['url']=='/emulator/',c"
-code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/emulator/")
-[ "$code" = "302" ] || fail "unauthenticated emulatorjs proxy should redirect, got $code"
-curl -fsS -b "$COOKIE" "http://127.0.0.1:$PORT/emulator/" | grep -q "EJS_core" || fail "emulatorjs player page missing EJS_core"
-curl -fsS -b "$COOKIE" "http://127.0.0.1:$PORT/emulator/rom" | grep -q "NESROM" || fail "emulatorjs ROM not served"
-# Turning the proxy off switches the "Open" URL to the direct child port.
-PATCHED=$(curl -fsS -b "$COOKIE" -X PATCH -H 'Content-Type: application/json' \
-  -d '{"proxy":false}' "http://127.0.0.1:$PORT/api/cards/$ID")
-DIRECT=$(echo "$PATCHED" | python3 -c "import sys,json;print(json.load(sys.stdin)['url'])")
-echo "$PATCHED" | python3 -c "import sys,json;c=json.load(sys.stdin);assert c['disableProxy'] is True,c"
-echo "$DIRECT" | python3 -c "import sys,re;assert re.match(r'^http://127\.0\.0\.1:\d+/$', sys.stdin.read().strip()), '$DIRECT'"
-curl -fsS "$DIRECT" | grep -q "EJS_core" || fail "direct emulatorjs URL should serve the player page"
-# Proxy back on restores the same-origin path.
-curl -fsS -b "$COOKIE" -X PATCH -H 'Content-Type: application/json' -d '{"proxy":true}' \
-  "http://127.0.0.1:$PORT/api/cards/$ID" | python3 -c "import sys,json;assert json.load(sys.stdin)['url']=='/emulator/'"
-curl -fsS -b "$COOKIE" -X POST "http://127.0.0.1:$PORT/api/cards/$ID/stop" >/dev/null || fail "emulatorjs stop failed"
-# After stop the same-origin proxy answers a localized stopped page.
-code=$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" "http://127.0.0.1:$PORT/emulator/")
-[ "$code" = "503" ] || fail "emulatorjs proxy after stop should be 503, got $code"
-curl -fsS -b "$COOKIE" -X DELETE "http://127.0.0.1:$PORT/api/cards/$ID" >/dev/null || fail "emulatorjs delete failed"
 
 echo "== friendly port message =="
 OUT=$("$BIN" serve --config "$CFG" --port "$PORT" 2>&1) || fail "second serve should exit 0"

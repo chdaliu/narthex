@@ -31,7 +31,7 @@ type cardRequest struct {
 	Background string `json:"background"`
 	Kind       string `json:"kind"`
 	// Dir is the project directory for kinds that point at a project
-	// (mdbook) or the ROM file (emulatorjs); required for both.
+	// (mdbook); required for it.
 	Dir string `json:"dir"`
 	// Proxy is the per-card reverse-proxy switch of the proxy-capable
 	// built-in kinds. nil leaves it unchanged; true uses the same-origin
@@ -57,7 +57,7 @@ func (s *Service) HandleCreateCard(w http.ResponseWriter, r *http.Request) {
 	if kind == "" {
 		kind = store.KindComfyUI
 	}
-	if kind != store.KindComfyUI && kind != store.KindOpencode && kind != store.KindMdbook && kind != store.KindGitvelo && kind != store.KindVSCode && kind != store.KindVSCodium && kind != store.KindWetty && kind != store.KindEmulatorJS && kind != store.KindCustom {
+	if kind != store.KindComfyUI && kind != store.KindOpencode && kind != store.KindMdbook && kind != store.KindGitvelo && kind != store.KindVSCode && kind != store.KindVSCodium && kind != store.KindCustom {
 		s.writeError(w, http.StatusBadRequest, "err.kindUnsupported", kind)
 		return
 	}
@@ -78,14 +78,6 @@ func (s *Service) HandleCreateCard(w http.ResponseWriter, r *http.Request) {
 		dir = filepath.Clean(req.Dir)
 		if !s.mdbookProjectDir(dir) {
 			s.writeError(w, http.StatusBadRequest, "err.mdbookNoProject")
-			return
-		}
-	case store.KindEmulatorJS:
-		// The emulatorjs card must point at a ROM recognized under the
-		// configured game directories; never an arbitrary path.
-		dir = filepath.Clean(req.Dir)
-		if !s.emulatorGamePath(dir) {
-			s.writeError(w, http.StatusBadRequest, "err.emulatorNoGame")
 			return
 		}
 	case store.KindCustom:
@@ -340,7 +332,7 @@ func (s *Service) HandleStartCard(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusBadRequest, "err.customExecNotFound", card.Custom.Exec)
 			return
 		}
-		st, errKey := s.beginInstallLocked(card, true, s.browserHosts(r.Host))
+		st, errKey := s.beginInstallLocked(card, true)
 		if errKey != "" {
 			s.mu.Unlock()
 			s.writeError(w, http.StatusBadRequest, errKey)
@@ -348,7 +340,7 @@ func (s *Service) HandleStartCard(w http.ResponseWriter, r *http.Request) {
 		}
 		v := s.view(*card, r.Host)
 		s.mu.Unlock()
-		go s.runInstall(st, card.ID, true, s.browserHosts(r.Host))
+		go s.runInstall(st, card.ID, true, r.Host)
 		WriteJSON(w, http.StatusOK, v)
 		return
 	}
@@ -377,7 +369,6 @@ func (s *Service) startCardLocked(card *store.Card, reqHost string) (CardView, s
 	spec := procman.StartSpec{
 		Card:   *card,
 		Dir:    dir,
-		Hosts:  s.browserHosts(reqHost),
 		NoAuth: card.Kind == store.KindGitvelo && !card.DisableProxy,
 		Launch: s.launchFor(*card),
 	}
@@ -477,12 +468,6 @@ func (s *Service) appInstalled(kind string) bool {
 		return s.VscodeBin() != ""
 	case store.KindVSCodium:
 		return s.VscodiumBin() != ""
-	case store.KindWetty:
-		return s.WettyBin() != ""
-	case store.KindEmulatorJS:
-		// EmulatorJS has no external CLI: the kind is available once at
-		// least one game directory is configured.
-		return len(s.Config.EmulatorJS.Dirs) > 0
 	case store.KindCustom:
 		// Custom cards need no detection: the user supplies the program.
 		return true
@@ -502,9 +487,7 @@ func (s *Service) installDir(kind, cardDir string) string {
 		}
 	case store.KindMdbook:
 		return cardDir
-	case store.KindEmulatorJS:
-		return cardDir
-	case store.KindOpencode, store.KindVSCode, store.KindVSCodium, store.KindWetty:
+	case store.KindOpencode, store.KindVSCode, store.KindVSCodium:
 		if home, err := os.UserHomeDir(); err == nil {
 			return home
 		}
@@ -538,20 +521,6 @@ func (s *Service) mdbookProjectDir(dir string) bool {
 	return false
 }
 
-// emulatorGamePath reports whether dir is one of the ROM files recognized
-// under the configured game directories.
-func (s *Service) emulatorGamePath(dir string) bool {
-	if dir == "" {
-		return false
-	}
-	for _, g := range s.EmulatorGames(s.Config.EmulatorJS.Dirs) {
-		if g.Path == dir {
-			return true
-		}
-	}
-	return false
-}
-
 // kindLabel is the default card name and display label for a kind.
 func kindLabel(kind string) string {
 	switch kind {
@@ -567,10 +536,6 @@ func kindLabel(kind string) string {
 		return "VS Code"
 	case store.KindVSCodium:
 		return "VSCodium"
-	case store.KindWetty:
-		return "WeTTY"
-	case store.KindEmulatorJS:
-		return "EmulatorJS"
 	case store.KindCustom:
 		return "Custom"
 	}
@@ -603,10 +568,6 @@ func defaultIcon(icon, kind string) string {
 			return "code"
 		case store.KindVSCodium:
 			return "code"
-		case store.KindWetty:
-			return "terminal"
-		case store.KindEmulatorJS:
-			return "gamepad-2"
 		case store.KindCustom:
 			return "rocket"
 		}

@@ -51,15 +51,6 @@ const (
 	// KindVSCodium launches the VSCodium web server (`codium serve-web`).
 	// Kept separate from KindVSCode so both can run at the same time.
 	KindVSCodium = "vscodium"
-	// KindWetty launches the WeTTY terminal-over-web server (`wetty`).
-	// WeTTY has no HTTP-layer auth: the browser authenticates with the
-	// SSH account of the configured sshHost (localhost by default).
-	KindWetty = "wetty"
-	// KindEmulatorJS launches the EmulatorJS retro-emulator player. Unlike
-	// the other kinds there is no external CLI: narthex re-execs its own
-	// binary (the hidden `emulator-serve` subcommand) to serve the player
-	// page and the selected ROM (see procman.startEmulatorJS).
-	KindEmulatorJS = "emulatorjs"
 	// KindCustom launches a user-defined command. Unlike the built-in kinds,
 	// any number of custom cards may exist (they are identified by ID).
 	KindCustom = "custom"
@@ -199,65 +190,6 @@ type VscodiumConfig struct {
 	DataDir string `json:"dataDir,omitempty"`
 }
 
-// WeTTY SSH modes (WettyConfig.SSHMode).
-const (
-	// WettySSHManaged spawns a private sshd bound to 127.0.0.1 for the
-	// card's lifetime (default); no system SSH server is needed.
-	WettySSHManaged = "managed"
-	// WettySSHSystem connects to WettyConfig.SSHHost/SSHPort instead.
-	WettySSHSystem = "system"
-)
-
-// WettyConfig controls how the WeTTY terminal-over-web server is spawned.
-type WettyConfig struct {
-	// Hostname is the listen address of the WeTTY server. 0.0.0.0 makes it
-	// reachable from other devices on the LAN.
-	Hostname string `json:"hostname"`
-	// PortRange is the range a free port is picked from.
-	PortRange [2]int `json:"portRange"`
-	// SSHMode selects how WeTTY reaches SSH: WettySSHManaged (default)
-	// spawns a private sshd bound to 127.0.0.1 for the card's lifetime,
-	// WettySSHSystem uses SSHHost/SSHPort as-is.
-	SSHMode string `json:"sshMode,omitempty"`
-	// SSHPortRange is the range a free port is picked from for the managed
-	// sshd.
-	SSHPortRange [2]int `json:"sshPortRange,omitempty"`
-	// SSHHost is the SSH server WeTTY connects to (--ssh-host) in system
-	// mode. Defaults to localhost (the narthex host). In managed mode it
-	// must be a loopback address; pointing it at another machine always
-	// connects directly.
-	SSHHost string `json:"sshHost,omitempty"`
-	// SSHPort is the SSH server port (--ssh-port) in system mode. 0 uses
-	// WeTTY's default.
-	SSHPort int `json:"sshPort,omitempty"`
-	// SSHUser is the default SSH user (--ssh-user). Empty lets WeTTY prompt
-	// for a username; in managed mode it defaults to the narthex user (the
-	// only account the private sshd accepts).
-	SSHUser string `json:"sshUser,omitempty"`
-}
-
-// EmulatorJSConfig controls the EmulatorJS retro-emulator card. The player
-// page is served by a narthex child process (the hidden `emulator-serve`
-// subcommand), reached either same-origin through the /emulator/ proxy or
-// directly on its own port.
-type EmulatorJSConfig struct {
-	// Hostname is the listen address of the EmulatorJS server. 0.0.0.0
-	// makes it reachable from other devices on the LAN.
-	Hostname string `json:"hostname"`
-	// PortRange is the range a free port is picked from.
-	PortRange [2]int `json:"portRange"`
-	// Dirs are the directories scanned for ROMs. The emulatorjs card kind
-	// is hidden while this list is empty.
-	Dirs []string `json:"dirs,omitempty"`
-	// DataPath is a local EmulatorJS data/ directory (loader.js, cores, …)
-	// used instead of the public CDN, so the player works offline. A leading
-	// ~/ is expanded; empty uses https://cdn.emulatorjs.org/<cdnVersion>/data/.
-	DataPath string `json:"dataPath,omitempty"`
-	// CDNVersion selects the CDN build when DataPath is empty: stable
-	// (default), latest or nightly.
-	CDNVersion string `json:"cdnVersion,omitempty"`
-}
-
 // CustomConfig controls user-defined custom cards.
 type CustomConfig struct {
 	// Hostname is the listen address proposed to custom apps via the
@@ -293,10 +225,6 @@ type Config struct {
 	Vscode VscodeConfig `json:"vscode"`
 	// Vscodium controls the VSCodium web server card.
 	Vscodium VscodiumConfig `json:"vscodium"`
-	// Wetty controls the WeTTY terminal-over-web card.
-	Wetty WettyConfig `json:"wetty"`
-	// EmulatorJS controls the EmulatorJS retro-emulator card.
-	EmulatorJS EmulatorJSConfig `json:"emulatorjs"`
 	// Custom controls user-defined custom cards.
 	Custom CustomConfig `json:"custom"`
 	// Language selects the UI and CLI language: en (default), zh-CN, zh-TW.
@@ -352,19 +280,6 @@ func DefaultConfig() *Config {
 		Vscodium: VscodiumConfig{
 			Hostname:  "0.0.0.0",
 			PortRange: [2]int{4700, 4899},
-		},
-		Wetty: WettyConfig{
-			Hostname:     "0.0.0.0",
-			PortRange:    [2]int{4900, 5099},
-			SSHMode:      WettySSHManaged,
-			SSHPortRange: [2]int{5300, 5399},
-			SSHHost:      "localhost",
-		},
-		EmulatorJS: EmulatorJSConfig{
-			Hostname:   "0.0.0.0",
-			PortRange:  [2]int{5100, 5299},
-			Dirs:       []string{},
-			CDNVersion: "stable",
 		},
 		Custom: CustomConfig{
 			Hostname:         "0.0.0.0",
@@ -475,41 +390,6 @@ func LoadConfig(path string) (*Config, error) {
 	if c.Vscodium.PortRange == [2]int{0, 0} {
 		c.Vscodium.PortRange = def.Vscodium.PortRange
 	}
-	if c.Wetty.Hostname == "" {
-		c.Wetty.Hostname = def.Wetty.Hostname
-	}
-	if c.Wetty.PortRange == [2]int{0, 0} {
-		c.Wetty.PortRange = def.Wetty.PortRange
-	}
-	if c.Wetty.SSHHost == "" {
-		c.Wetty.SSHHost = def.Wetty.SSHHost
-	}
-	if c.Wetty.SSHPortRange == [2]int{0, 0} {
-		c.Wetty.SSHPortRange = def.Wetty.SSHPortRange
-	}
-	if c.Wetty.SSHMode == "" {
-		// Backward compatibility: an explicitly configured sshPort meant
-		// "use the system sshd on that port", so do not silently replace it
-		// with a managed sshd. Fresh/old configs without it default to the
-		// managed endpoint.
-		if c.Wetty.SSHPort != 0 {
-			c.Wetty.SSHMode = WettySSHSystem
-		} else {
-			c.Wetty.SSHMode = def.Wetty.SSHMode
-		}
-	}
-	if c.Wetty.SSHMode != WettySSHManaged && c.Wetty.SSHMode != WettySSHSystem {
-		return nil, fmt.Errorf("wetty.sshMode must be %q or %q, got %q", WettySSHManaged, WettySSHSystem, c.Wetty.SSHMode)
-	}
-	if c.EmulatorJS.Hostname == "" {
-		c.EmulatorJS.Hostname = def.EmulatorJS.Hostname
-	}
-	if c.EmulatorJS.PortRange == [2]int{0, 0} {
-		c.EmulatorJS.PortRange = def.EmulatorJS.PortRange
-	}
-	if c.EmulatorJS.CDNVersion == "" {
-		c.EmulatorJS.CDNVersion = def.EmulatorJS.CDNVersion
-	}
 	if c.Custom.Hostname == "" {
 		c.Custom.Hostname = def.Custom.Hostname
 	}
@@ -598,13 +478,13 @@ type Card struct {
 	PID        int    `json:"pid"`
 	Port       int    `json:"port"`
 	StartedAt  int64  `json:"startedAt"`
-	// Kind selects the managed app: "comfyui" ... "emulatorjs" or "custom".
+	// Kind selects the managed app: "comfyui" ... "custom".
 	Kind string `json:"kind"`
 	// Dir is the project directory the card operates on. Set for kinds that
-	// pick a project (mdbook) and for emulatorjs (the selected ROM file).
+	// pick a project (mdbook).
 	Dir string `json:"dir,omitempty"`
 	// DisableProxy turns off the same-origin reverse proxy for the
-	// proxy-capable built-in kinds (mdbook/emulatorjs/opencode/gitvelo):
+	// proxy-capable built-in kinds (mdbook/opencode/gitvelo):
 	// the card then opens the app's own direct URL instead. Missing/false
 	// keeps the proxy on. Custom cards use Custom.ProxyMode instead.
 	DisableProxy bool `json:"disableProxy,omitempty"`
@@ -658,7 +538,7 @@ func LoadState(path string) (*State, error) {
 			kept = append(kept, c)
 			continue
 		}
-		if c.Kind != KindComfyUI && c.Kind != KindOpencode && c.Kind != KindMdbook && c.Kind != KindGitvelo && c.Kind != KindVSCode && c.Kind != KindVSCodium && c.Kind != KindWetty && c.Kind != KindEmulatorJS {
+		if c.Kind != KindComfyUI && c.Kind != KindOpencode && c.Kind != KindMdbook && c.Kind != KindGitvelo && c.Kind != KindVSCode && c.Kind != KindVSCodium {
 			continue
 		}
 		if seenKind[c.Kind] {

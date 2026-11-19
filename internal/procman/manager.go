@@ -1,5 +1,5 @@
-// Package procman spawns and supervises managed instances (ComfyUI
-// servers, the opencode web server).
+// Package procman spawns and supervises managed instances (the built-in
+// app servers and user-defined custom commands).
 package procman
 
 import (
@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sync"
 	"syscall"
 	"time"
 )
@@ -78,45 +77,6 @@ type Manager struct {
 	// VscodiumMachineSettingsFile is the VSCodium equivalent of
 	// VscodeMachineSettingsFile, independent from it.
 	VscodiumMachineSettingsFile string
-	// WettyHostname is the listen address passed to the WeTTY server
-	// (0.0.0.0 makes it reachable from other devices).
-	WettyHostname string
-	// WettyPortRange is the range a free port is picked from for the WeTTY
-	// server.
-	WettyPortRange [2]int
-	// WettySSHHost is the SSH server WeTTY connects to (--ssh-host).
-	WettySSHHost string
-	// WettySSHPort is the SSH server port (--ssh-port); 0 uses WeTTY's
-	// default.
-	WettySSHPort int
-	// WettySSHUser is the default SSH user (--ssh-user); empty lets WeTTY
-	// prompt for a username.
-	WettySSHUser string
-	// WettySSHMode selects how WeTTY reaches SSH: "managed" (default)
-	// spawns a private sshd bound to 127.0.0.1 for the card's lifetime,
-	// "system" connects to WettySSHHost/WettySSHPort as configured.
-	WettySSHMode string
-	// WettySSHPortRange is the range a free port is picked from for the
-	// managed sshd.
-	WettySSHPortRange [2]int
-	// WettySSHDDir holds the generated managed-sshd config, host key and
-	// pid state. Empty falls back to <LogDir>/wetty-sshd.
-	WettySSHDDir string
-	// wettyMu serializes managed-sshd state changes between Start, Stop
-	// and the wetty exit callback.
-	wettyMu sync.Mutex
-	// EmulatorHostname is the listen address passed to the EmulatorJS
-	// child server (0.0.0.0 makes it reachable from other devices).
-	EmulatorHostname string
-	// EmulatorPortRange is the range a free port is picked from for the
-	// EmulatorJS child server.
-	EmulatorPortRange [2]int
-	// EmulatorDataDir is an optional local EmulatorJS data/ directory the
-	// child serves (offline); empty uses the public CDN.
-	EmulatorDataDir string
-	// EmulatorCDNVersion is the CDN build used when EmulatorDataDir is
-	// empty (stable/latest/nightly).
-	EmulatorCDNVersion string
 	// CustomHostname is the listen address proposed to custom apps via the
 	// {host} placeholder when the card opens directly.
 	CustomHostname string
@@ -171,11 +131,7 @@ func (m *Manager) spawn(cmd *exec.Cmd, id string, onExit ...func(pid int)) (int,
 
 // Stop terminates the process group of pid.
 func (m *Manager) Stop(pid int) error {
-	err := Stop(pid)
-	// The WeTTY card owns a sidecar sshd that must die with it. The pid
-	// check inside keeps stopping other kinds from touching it.
-	m.stopManagedSSHD(pid)
-	return err
+	return Stop(pid)
 }
 
 // Status reports the live state of the instance with pid/port: the

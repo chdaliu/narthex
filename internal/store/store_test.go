@@ -20,9 +20,6 @@ func TestDefaultConfig(t *testing.T) {
 	if c.SessionTTLHours != 720 {
 		t.Fatalf("default session TTL = %d, want 720", c.SessionTTLHours)
 	}
-	if c.EmulatorJS.CDNVersion != "stable" || c.EmulatorJS.PortRange != [2]int{5100, 5299} {
-		t.Fatalf("emulatorjs defaults = %+v", c.EmulatorJS)
-	}
 }
 
 func TestExpandPath(t *testing.T) {
@@ -153,9 +150,7 @@ func TestLoadStateKeepsOneCardPerKind(t *testing.T) {
 		{"id":"c","kind":"opencode","name":"oc"},
 		{"id":"d","kind":"transmission","name":"tx"},
 		{"id":"e","kind":"opencode","name":"dup-oc"},
-		{"id":"f","kind":"weird","name":"obsolete"},
-		{"id":"g","kind":"wetty","name":"wt"},
-		{"id":"h","kind":"emulatorjs","name":"emu","disableProxy":true}
+		{"id":"f","kind":"weird","name":"obsolete"}
 	]}`
 	if err := os.WriteFile(path, []byte(state), 0o600); err != nil {
 		t.Fatal(err)
@@ -164,20 +159,14 @@ func TestLoadStateKeepsOneCardPerKind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Cards) != 4 {
-		t.Fatalf("expected 4 cards (first per kind), got %+v", got.Cards)
+	if len(got.Cards) != 2 {
+		t.Fatalf("expected 2 cards (first per kind), got %+v", got.Cards)
 	}
 	if got.Cards[0].ID != "a" || got.Cards[0].Kind != KindComfyUI {
 		t.Fatalf("first comfyui card should win: %+v", got.Cards[0])
 	}
 	if got.Cards[1].ID != "c" || got.Cards[1].Kind != KindOpencode {
 		t.Fatalf("first opencode card should win: %+v", got.Cards[1])
-	}
-	if got.Cards[2].ID != "g" || got.Cards[2].Kind != KindWetty {
-		t.Fatalf("wetty card should be kept: %+v", got.Cards[2])
-	}
-	if got.Cards[3].ID != "h" || got.Cards[3].Kind != KindEmulatorJS || !got.Cards[3].DisableProxy {
-		t.Fatalf("emulatorjs card should be kept with disableProxy: %+v", got.Cards[3])
 	}
 }
 
@@ -232,50 +221,5 @@ func TestSloganSemantics(t *testing.T) {
 	}
 	if got.Slogan == nil || *got.Slogan != "custom" {
 		t.Fatalf("custom slogan not preserved, got %v", got.Slogan)
-	}
-}
-
-func TestWettySSHModeDefaultsAndNormalization(t *testing.T) {
-	def := DefaultConfig()
-	if def.Wetty.SSHMode != WettySSHManaged || def.Wetty.SSHPortRange != [2]int{5300, 5399} {
-		t.Fatalf("wetty defaults = %+v", def.Wetty)
-	}
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, ConfigFile)
-
-	// Missing sshMode defaults to the managed endpoint.
-	if err := os.WriteFile(path, []byte(`{"passwordHash":"x"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	c, err := LoadConfig(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.Wetty.SSHMode != WettySSHManaged {
-		t.Fatalf("empty sshMode = %q, want %q", c.Wetty.SSHMode, WettySSHManaged)
-	}
-	if c.Wetty.SSHPortRange != [2]int{5300, 5399} {
-		t.Fatalf("empty sshPortRange = %v", c.Wetty.SSHPortRange)
-	}
-
-	// An old config with an explicit sshPort keeps using the system sshd.
-	if err := os.WriteFile(path, []byte(`{"passwordHash":"x","wetty":{"sshPort":2222}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	c, err = LoadConfig(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.Wetty.SSHMode != WettySSHSystem {
-		t.Fatalf("sshPort without sshMode = %q, want %q", c.Wetty.SSHMode, WettySSHSystem)
-	}
-
-	// Unknown modes are rejected instead of silently picking a behavior.
-	if err := os.WriteFile(path, []byte(`{"passwordHash":"x","wetty":{"sshMode":"auto"}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadConfig(path); err == nil {
-		t.Fatal("unknown wetty.sshMode should fail to load")
 	}
 }

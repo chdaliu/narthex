@@ -682,8 +682,7 @@ function detailRows(card) {
     rows.push(`<div class="detail-row"><span class="detail-label">${t("card.memoryLabel")}</span><span class="detail-value">${esc(fmtMem(card.memoryKB))}</span></div>`);
   }
   if (card.dir) {
-    const dirLabel = card.kind === "emulatorjs" ? t("card.gameLabel") : t("card.dirLabel");
-    rows.push(`<div class="detail-row"><span class="detail-label">${dirLabel}</span><span class="detail-value"><code>${esc(card.dir)}</code></span></div>`);
+    rows.push(`<div class="detail-row"><span class="detail-label">${t("card.dirLabel")}</span><span class="detail-value"><code>${esc(card.dir)}</code></span></div>`);
   }
   const launch = card.launch || card.custom;
   if (launch) {
@@ -910,20 +909,18 @@ function kindIcon(kind) {
     case "gitvelo": return "git-branch";
     case "vscode": return "code";
     case "vscodium": return "code";
-    case "wetty": return "terminal";
-    case "emulatorjs": return "gamepad-2";
     case "custom": return "rocket";
     default: return "palette";
   }
 }
 
 // ALL_KINDS is the canonical order of the app types.
-const ALL_KINDS = ["comfyui", "opencode", "mdbook", "gitvelo", "vscode", "vscodium", "wetty", "emulatorjs", "custom"];
+const ALL_KINDS = ["comfyui", "opencode", "mdbook", "gitvelo", "vscode", "vscodium", "custom"];
 
 // PROXY_KINDS are the built-in kinds whose "Open" URL can be either the
 // same-origin narthex reverse proxy or the app's own direct URL; their card
 // settings show a reverse-proxy toggle. Custom cards use a 3-state select.
-const PROXY_KINDS = ["mdbook", "emulatorjs", "opencode", "gitvelo"];
+const PROXY_KINDS = ["mdbook", "opencode", "gitvelo"];
 
 // isProxyKind reports whether a built-in kind supports the reverse-proxy
 // toggle.
@@ -941,7 +938,9 @@ function customProxyLabel(mode) {
 }
 
 // customFieldsHTML renders the custom-card configuration fields. prefix
-// keeps the element IDs unique between the add and edit modals.
+// keeps the element IDs unique between the add and edit modals. Built-in
+// cards do not render these fields at all (they have no editable launch
+// configuration).
 function customFieldsHTML(prefix, c, opts = {}) {
   c = c || {};
   const execMode = c.execMode || "args";
@@ -1052,8 +1051,7 @@ function bindUpdateFields(modal, prefix) {
 }
 
 // bindCustomFields wires the mode switches and returns a reader for the
-// current values. Built-in presets pass locked=true and omit the proxy and
-// install sections.
+// current values (custom cards only).
 function bindCustomFields(modal, prefix, opts = {}) {
   const locked = !!opts.locked;
   const mode = $(`#${prefix}-exec-mode`, modal);
@@ -1244,10 +1242,9 @@ async function openAddModal() {
 
   nextBtn.addEventListener("click", () => {
     if (!chosenKind) return;
-    if (chosenKind === "mdbook" || chosenKind === "emulatorjs") {
-      // mdBook cards point at a book project and EmulatorJS cards at a ROM:
-      // let the user pick one (mdbook can also create a new book) before the
-      // pickers step.
+    if (chosenKind === "mdbook") {
+      // mdBook cards point at a book project: let the user pick one (or
+      // create a new book) before the pickers step.
       stepKind.hidden = true;
       stepProject.hidden = false;
       setupProjectStep();
@@ -1288,7 +1285,7 @@ async function openAddModal() {
     showPickers("Custom");
   });
 
-  /* ---- mdbook project / emulatorjs game step ---- */
+  /* ---- mdbook project step ---- */
 
   const projectList = $("#project-list", modal);
   const projectEmpty = $("#project-empty", modal);
@@ -1298,30 +1295,23 @@ async function openAddModal() {
   const projectNext = $("#btn-project-next", modal);
   let projects = [];
 
-  // setupProjectStep adapts the shared step to the chosen kind: the mdBook
-  // flow can create a book, the EmulatorJS flow only picks a ROM.
   function setupProjectStep() {
-    const isBook = chosenKind === "mdbook";
-    $("#project-step-label", modal).textContent = t(isBook ? "modal.projectStep" : "modal.gameStep");
-    $("#project-create", modal).hidden = !isBook;
-    projectEmpty.textContent = t(isBook ? "modal.projectEmpty" : "modal.gameEmpty");
+    $("#project-step-label", modal).textContent = t("modal.projectStep");
+    $("#project-create", modal).hidden = false;
+    projectEmpty.textContent = t("modal.projectEmpty");
   }
 
   function renderProjects() {
-    const isBook = chosenKind === "mdbook";
     projectList.innerHTML = "";
     projectEmpty.hidden = projects.length > 0;
     for (const p of projects) {
       const item = document.createElement("button");
       item.type = "button";
       item.className = "kind-item";
-      const sub = isBook
-        ? `<div class="project-path">${esc(p.path)}</div>`
-        : `<div class="project-path">${esc(p.system)} · ${esc(p.core)} · ${esc(p.path)}</div>`;
       item.innerHTML = `
         <span>
           <div>${esc(p.name)}</div>
-          ${sub}
+          <div class="project-path">${esc(p.path)}</div>
         </span>`;
       item.addEventListener("click", () => {
         projectList.querySelectorAll(".kind-item").forEach((el) => el.classList.remove("selected"));
@@ -1335,10 +1325,9 @@ async function openAddModal() {
   }
 
   async function loadProjectStep() {
-    const isBook = chosenKind === "mdbook";
     try {
-      const data = await api(isBook ? "/api/mdbook/projects" : "/api/emulator/games");
-      projects = (isBook ? data.projects : data.games) || [];
+      const data = await api("/api/mdbook/projects");
+      projects = data.projects || [];
       projectParent.innerHTML = "";
       for (const d of data.dirs || []) {
         const opt = document.createElement("option");
@@ -1411,7 +1400,7 @@ async function openAddModal() {
       icon: iconPicker.get(),
       background: bgPicker.get(),
     };
-    if (chosenKind === "mdbook" || chosenKind === "emulatorjs") body.dir = chosenDir;
+    if (chosenKind === "mdbook") body.dir = chosenDir;
     if (chosenKind === "custom" && customReader) body.custom = customReader();
     if (chosenKind === "custom" && updateReader) body.update = updateReader();
     try {
@@ -1431,8 +1420,10 @@ async function openAddModal() {
 /* ---------- edit modal ---------- */
 
 async function openEditModal(card) {
-  const launchConfig = card.launch || card.custom;
   const isCustom = card.kind === "custom";
+  // Built-in presets have locked launch fields; don't render controls the
+  // user cannot use. Only custom cards expose the launch configuration.
+  const launchConfig = isCustom ? (card.custom || card.launch) : null;
   const caps = card.capabilities || {};
   const canEditProxy = caps.editProxy !== undefined ? caps.editProxy : isProxyKind(card.kind);
   const canEditLegacyProxy = card.kind !== "custom" && canEditProxy;
@@ -1451,8 +1442,7 @@ async function openEditModal(card) {
       <div class="field-label">${t("modal.bgLabel")}</div>
       <div id="edit-bg-grid"></div>
     </div>
-    ${launchConfig ? `<div id="edit-custom-fields">${customFieldsHTML("edit", launchConfig, { locked: !isCustom, showInstall: isCustom, showProxy: isCustom })}</div>` : ""}
-    ${!isCustom ? `<div class="muted" style="font-size:12px;margin-top:-4px">${t("modal.presetLockedHint")}</div>` : ""}
+    ${launchConfig ? `<div id="edit-custom-fields">${customFieldsHTML("edit", launchConfig)}</div>` : ""}
     <div>
       <div id="edit-update-fields">${updateFieldsHTML("edit", card.update)}</div>
     </div>
@@ -1478,7 +1468,7 @@ async function openEditModal(card) {
   const iconPicker = iconPickerGrid(card.icon);
   $("#edit-icon-grid", modal).appendChild(iconPicker.el);
   const bgPicker = bgPickerGrid($("#edit-bg-grid", modal), card.background);
-  const customReader = launchConfig ? bindCustomFields(modal, "edit", { locked: !isCustom }) : null;
+  const customReader = launchConfig ? bindCustomFields(modal, "edit") : null;
   const updateReader = bindUpdateFields(modal, "edit");
   const isGitvelo = card.kind === "gitvelo";
   const gwPortInput = canEditGatewayPort ? $("#edit-gateway-port", modal) : null;

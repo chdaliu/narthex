@@ -46,9 +46,9 @@ func lookPath(name string) string {
 // childPathEnv returns env with the existing well-known Homebrew bin
 // directories appended to PATH (missing ones only). lookPath can resolve a
 // CLI through that fallback while the directory is absent from PATH, but
-// interpreters spawned by the CLI use PATH themselves: WeTTY is a Node
-// script (`#!/usr/bin/env node`), so under launchd's minimal PATH it starts
-// and immediately dies with "env: node: No such file or directory".
+// interpreters spawned by the CLI use PATH themselves: a Node-shebang CLI
+// (`#!/usr/bin/env node`) under launchd's minimal PATH starts and
+// immediately dies with "env: node: No such file or directory".
 //
 // Existing PATH entries keep their order and precedence (the no-open shim
 // dir must stay first), and a PATH supplied by the caller is never

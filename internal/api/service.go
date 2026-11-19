@@ -69,13 +69,6 @@ type Service struct {
 	// when it is not installed. Defaults to procman.DetectVSCodium;
 	// overridable in tests.
 	VscodiumBin func() string
-	// WettyBin returns the path to the wetty CLI, or "" when it is not
-	// installed. Defaults to procman.DetectWetty; overridable in tests.
-	WettyBin func() string
-	// EmulatorGames returns the ROM games found under the given
-	// directories. Defaults to procman.DetectEmulatorGames; overridable in
-	// tests.
-	EmulatorGames func(dirs []string) []procman.EmulatorGame
 	// BrewManaged reports whether a `brew services` job for narthex is
 	// installed. Defaults to autostart.BrewManaged; overridable in tests.
 	BrewManaged func() bool
@@ -175,8 +168,6 @@ func NewService(dir string, cfg *store.Config, state *store.State, backend procm
 		GitveloBin:          procman.DetectGitvelo,
 		VscodeBin:           procman.DetectVSCode,
 		VscodiumBin:         procman.DetectVSCodium,
-		WettyBin:            procman.DetectWetty,
-		EmulatorGames:       procman.DetectEmulatorGames,
 		BrewManaged:         autostart.BrewManaged,
 		Username:            username,
 		RestartDelay:        500 * time.Millisecond,
@@ -237,24 +228,6 @@ func (s *Service) MdbookGatewayTarget() (addr string, ok bool) {
 	defer s.mu.Unlock()
 	for _, c := range s.State.Cards {
 		if c.Kind != store.KindMdbook || c.Port <= 0 {
-			continue
-		}
-		if !s.Backend.Status(c.Kind, c.PID, c.Port).Alive {
-			return "", false
-		}
-		return net.JoinHostPort("127.0.0.1", strconv.Itoa(c.Port)), true
-	}
-	return "", false
-}
-
-// EmulatorGatewayTarget resolves the running EmulatorJS child server for the
-// same-origin proxy: the loopback address of the running emulatorjs card. ok
-// is false when no emulatorjs card is running.
-func (s *Service) EmulatorGatewayTarget() (addr string, ok bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, c := range s.State.Cards {
-		if c.Kind != store.KindEmulatorJS || c.Port <= 0 {
 			continue
 		}
 		if !s.Backend.Status(c.Kind, c.PID, c.Port).Alive {
@@ -351,7 +324,7 @@ func (s *Service) customGatewayPortLocked(id string) int {
 // app's own direct URL.
 func proxyCapable(kind string) bool {
 	switch kind {
-	case store.KindMdbook, store.KindEmulatorJS, store.KindOpencode, store.KindGitvelo, store.KindCustom:
+	case store.KindMdbook, store.KindOpencode, store.KindGitvelo, store.KindCustom:
 		return true
 	}
 	return false
@@ -667,13 +640,6 @@ func (s *Service) launchFor(c store.Card) *store.LaunchConfig {
 	case store.KindVSCodium:
 		l.Exec = "codium"
 		l.Command = "serve-web --host {host} --port {port} --connection-token …"
-	case store.KindWetty:
-		l.Exec = "wetty"
-		l.Command = "--port {port} --host {host} [--ssh-host …] [--ssh-user …]"
-	case store.KindEmulatorJS:
-		l.Exec = "narthex emulator-serve"
-		l.Command = "--rom … --core … --host {host} --port {port}"
-		l.WorkDir = filepath.Dir(c.Dir)
 	}
 	switch c.Kind {
 	case store.KindOpencode:
@@ -694,7 +660,7 @@ func (s *Service) presetProxyMode(c store.Card) string {
 		return store.CustomProxyOff
 	}
 	switch c.Kind {
-	case store.KindMdbook, store.KindEmulatorJS:
+	case store.KindMdbook:
 		return store.CustomProxyPath
 	case store.KindOpencode, store.KindGitvelo:
 		return store.CustomProxyGateway
@@ -741,7 +707,7 @@ func capabilitiesFor(kind string) CardCapabilities {
 // network address is configured it is used as-is (it may carry its own
 // port); otherwise the host mirrors how the visitor reached narthex (LAN
 // access) or falls back to loopback. The proxy-capable kinds (mdbook,
-// emulatorjs, opencode, gitvelo) return the proxy URL when proxy is on and
+// opencode, gitvelo) return the proxy URL when proxy is on and
 // their direct port URL otherwise; the VS Code-family kinds append their
 // connection token (`?tkn=`) because the server answers 403 without it.
 func (s *Service) instanceURL(reqHost string, card store.Card, proxy bool) string {
@@ -752,11 +718,6 @@ func (s *Service) instanceURL(reqHost string, card store.Card, proxy bool) strin
 		// narthex with no extra port to expose. The root-relative URL
 		// keeps working behind any host or scheme.
 		return gateway.MdbookPrefix + "/"
-	}
-	if kind == store.KindEmulatorJS && proxy {
-		// EmulatorJS is proxied same-origin under the dashboard listener the
-		// same way; the child server's direct port is used when proxy is off.
-		return gateway.EmulatorPrefix + "/"
 	}
 	if kind == store.KindCustom {
 		if port <= 0 || card.Custom == nil {
@@ -829,36 +790,6 @@ func (s *Service) baseURLForHost(reqHost, host string, port int) string {
 	return fmt.Sprintf("http://%s:%d/", host, port)
 }
 
-// browserHosts lists the browser-side hosts a directly-opened card (one
-// that serves its own page, e.g. WeTTY) may be reached from: the request
-// host (without the dashboard port) and, when configured, the internal
-// networking address. Servers with origin checks (WeTTY >= 4) derive their
-// trusted origins from it; the loopback variants are added by the backend.
-func (s *Service) browserHosts(reqHost string) []string {
-	seen := map[string]bool{}
-	var out []string
-	add := func(host string) {
-		if host = strings.Trim(strings.TrimSpace(host), "[]"); host == "" {
-			return
-		}
-		if h, _, err := net.SplitHostPort(host); err == nil {
-			host = strings.Trim(h, "[]")
-		}
-		if !seen[host] {
-			seen[host] = true
-			out = append(out, host)
-		}
-	}
-	add(reqHost)
-	if addr := strings.TrimSpace(s.Config.InternalAddress); addr != "" {
-		addr = strings.TrimPrefix(addr, "http://")
-		addr = strings.TrimPrefix(addr, "https://")
-		addr = strings.TrimSuffix(addr, "/")
-		add(addr)
-	}
-	return out
-}
-
 // codeToken returns the connection token of the VS Code-family kinds. It
 // is embedded in the "Open" URL so the browser sets the auth cookie on
 // first load (the server redirects to / and answers 200 afterwards).
@@ -893,10 +824,6 @@ func (s *Service) listenHost(kind string) string {
 		host = s.Config.Vscode.Hostname
 	case store.KindVSCodium:
 		host = s.Config.Vscodium.Hostname
-	case store.KindWetty:
-		host = s.Config.Wetty.Hostname
-	case store.KindEmulatorJS:
-		host = s.Config.EmulatorJS.Hostname
 	case store.KindCustom:
 		host = s.Config.Custom.Hostname
 	}
@@ -1279,14 +1206,6 @@ func (s *Service) appUnavailableReason(kind string) string {
 		if s.VscodiumBin() == "" {
 			return "add.reason.notInstalled"
 		}
-	case store.KindWetty:
-		if s.WettyBin() == "" {
-			return "add.reason.notInstalled"
-		}
-	case store.KindEmulatorJS:
-		if len(s.Config.EmulatorJS.Dirs) == 0 {
-			return "add.reason.emulatorNoDirs"
-		}
 	}
 	return ""
 }
@@ -1297,15 +1216,13 @@ func (s *Service) appUnavailableReason(kind string) string {
 // the UI knows they must be hidden.
 func (s *Service) HandleMeta(w http.ResponseWriter, r *http.Request) {
 	apps := map[string]appInfo{
-		store.KindComfyUI:    s.appInfoFor(store.KindComfyUI),
-		store.KindOpencode:   s.appInfoFor(store.KindOpencode),
-		store.KindMdbook:     s.appInfoFor(store.KindMdbook),
-		store.KindGitvelo:    s.appInfoFor(store.KindGitvelo),
-		store.KindVSCode:     s.appInfoFor(store.KindVSCode),
-		store.KindVSCodium:   s.appInfoFor(store.KindVSCodium),
-		store.KindWetty:      s.appInfoFor(store.KindWetty),
-		store.KindEmulatorJS: s.appInfoFor(store.KindEmulatorJS),
-		store.KindCustom:     s.appInfoFor(store.KindCustom),
+		store.KindComfyUI:  s.appInfoFor(store.KindComfyUI),
+		store.KindOpencode: s.appInfoFor(store.KindOpencode),
+		store.KindMdbook:   s.appInfoFor(store.KindMdbook),
+		store.KindGitvelo:  s.appInfoFor(store.KindGitvelo),
+		store.KindVSCode:   s.appInfoFor(store.KindVSCode),
+		store.KindVSCodium: s.appInfoFor(store.KindVSCodium),
+		store.KindCustom:   s.appInfoFor(store.KindCustom),
 	}
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"icons":              assetNames("assets/icons", ".svg"),
