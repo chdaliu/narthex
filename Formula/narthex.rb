@@ -5,7 +5,6 @@
 class Narthex < Formula
   desc "Lightweight web dashboard to launch and stop local apps"
   homepage "https://github.com/chdaliu/narthex"
-  version "0.3.0" # keep in sync with the latest release tag
   license "MIT"
 
   livecheck do
@@ -18,10 +17,10 @@ class Narthex < Formula
   # Linux bottles/tarballs.
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/chdaliu/narthex/releases/download/v#{version}/narthex_#{version}_darwin_arm64.tar.gz"
+      url "https://github.com/chdaliu/narthex/releases/download/v0.3.0/narthex_0.3.0_darwin_arm64.tar.gz"
       sha256 "84c8dd7ba077c5cb5429a58cda9dc798577c359ffb96da602d5cb1b488a68a5d"
     else
-      url "https://github.com/chdaliu/narthex/releases/download/v#{version}/narthex_#{version}_darwin_amd64.tar.gz"
+      url "https://github.com/chdaliu/narthex/releases/download/v0.3.0/narthex_0.3.0_darwin_amd64.tar.gz"
       sha256 "af6bac45c0f1e19a648868f08c8c306d5cb8cfa3f26bf5842db66f6dd30e024e"
     end
   end
